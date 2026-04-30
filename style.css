@@ -1030,16 +1030,22 @@ canvas {
 }
 .ticker-tab:hover:not(.active) { background: #1a1a1a; }
 
-#customTickerInput {
-    width: 110px;
-    background: #222;
+#tickerInput {
+    width: 100%;
+    background: #001a00;
     color: #00ff00;
     border: 1px solid #00ff00;
-    padding: 3px 7px;
+    padding: 8px 12px;
     font-family: 'Courier New', Courier, monospace;
-    font-size: 12px;
+    font-size: 16px;
+    font-weight: bold;
+    letter-spacing: 1px;
     text-transform: uppercase;
+    border-radius: 3px;
+    outline: none;
 }
+#tickerInput::placeholder { color: #006600; font-weight: normal; }
+#tickerInput:focus { border-color: #00ff88; box-shadow: 0 0 8px #00ff88; }
 
 /* ---- Future-locked level buttons ---- */
 .level-btn.future-lock {

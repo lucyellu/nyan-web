@@ -212,11 +212,11 @@ async function fetchYahooBarsCached(ticker, startSec, endSec) {
     });
 
     const expectedBars    = Math.max(1, Math.floor((endMs - startMs) / 60000));
-    const isHistorical    = endMs < Date.now() - 60 * 60 * 1000;
+    const isStable        = endMs < Date.now() - 3 * 60 * 1000;  // bars settle within ~3 min on Yahoo
     const hasGoodCoverage = inRange.length >= expectedBars * 0.7;
 
-    // Whole window is older than 60 min and we already have most of it — no network.
-    if (isHistorical && hasGoodCoverage) return inRange;
+    // Whole window has settled and we already have most of it — no network.
+    if (isStable && hasGoodCoverage) return inRange;
 
     // Otherwise fetch from network and merge into cache.
     const fresh = await fetchYahooBars(ticker, startSec, endSec);
@@ -250,18 +250,37 @@ function initDataSource() { setIndicator('VIRTUAL', '#888', typeof activeTicker 
 initDataSource();
 renderSeatHUD();
 
-// ---- SPY Historical Level System ----
+// ---- Level Select ----
 
-function getRecentTradingDays(count) {
-    const days = [];
-    const d = new Date();
-    while (days.length < count) {
-        const iso = d.toISOString().slice(0, 10);
-        const dow = d.getUTCDay();
-        if (dow !== 0 && dow !== 6) days.push(iso);
-        d.setUTCDate(d.getUTCDate() - 1);
+function showLevelSelect() {
+    document.getElementById('levelSelect').classList.remove('hidden');
+    populateLevelSelect();
+}
+
+function hideLevelSelect() {
+    document.getElementById('levelSelect').classList.add('hidden');
+}
+
+function populateLevelSelect() {
+    const inp = document.getElementById('tickerInput');
+    if (inp) inp.value = activeTicker || 'SPY';
+    const status = document.getElementById('levelSelectStatus');
+    if (status) status.textContent = '';
+}
+
+// Most recent YYYY-MM-DD (in ET) where 9:30–10:30 ET has finished. Weekends skipped.
+function lastCompletedOpenDateStr() {
+    const now = new Date();
+    const month = now.getUTCMonth() + 1;
+    const etOffsetMs = (month >= 3 && month <= 11) ? 4 * 3600000 : 5 * 3600000;  // EDT vs EST
+    // Shift back by 10:30 ET so the "boundary" time is midnight in our shifted clock,
+    // then take the date — this is the most recent date whose open window has closed.
+    const candidateMs = now.getTime() - etOffsetMs - (10 * 3600000 + 30 * 60000);
+    let date = new Date(candidateMs);
+    while (date.getUTCDay() === 0 || date.getUTCDay() === 6) {
+        date = new Date(date.getTime() - 86400000);
     }
-    return days;
+    return date.toISOString().slice(0, 10);
 }
 
 // Fetch a window of 1-min bars for a date+window. Bar-level cache makes
@@ -281,93 +300,17 @@ async function fetchBars(symbol, dateStr, win) {
     return await fetchYahooBarsCached(symbol, startSec, endSec);
 }
 
-async function fetchLatestPrice(symbol /*, isCrypto */) {
+async function fetchLatestPrice(symbol) {
     return await fetchYahooLatestPrice(symbol);
 }
 
-function isWindowAvailable(dateStr, win) {
-    const today = new Date().toISOString().slice(0, 10);
-    if (dateStr < today) return true;
-    if (dateStr > today) return false;
-    // Same day — check if the window has ended yet
-    const now = new Date();
-    const month = parseInt(dateStr.slice(5, 7), 10);
-    const etOffsetHours = (month >= 3 && month <= 11) ? 4 : 5; // hours to add to ET to get UTC
-    const endHourET = (win === 'open') ? 10.5 : 16.0;
-    const endHourUTC = endHourET + etOffsetHours;
-    const nowHourUTC = now.getUTCHours() + now.getUTCMinutes() / 60;
-    return nowHourUTC >= endHourUTC;
-}
-
-function showLevelSelect() {
-    document.getElementById('levelSelect').classList.remove('hidden');
-    populateLevelSelect();
-}
-
-function hideLevelSelect() {
-    document.getElementById('levelSelect').classList.add('hidden');
-}
-
-function isSpyMarketOpen() {
-    const now = new Date();
-    const dow = now.getUTCDay(); // 0=Sun, 6=Sat
-    if (dow === 0 || dow === 6) return false;
-    const month = now.getUTCMonth() + 1;
-    const etOffsetHours = (month >= 3 && month <= 11) ? 4 : 5;
-    const etHour = now.getUTCHours() - etOffsetHours + now.getUTCMinutes() / 60;
-    return etHour >= 9.5 && etHour < 16.0;
-}
-
-function populateLevelSelect() {
-    // SPY Live is now last-hour-replay (not real-time IEX), so available 24/7.
-    const spyBtn = document.getElementById('quickPlaySPYBtn');
-    if (spyBtn) {
-        spyBtn.disabled = false;
-        spyBtn.textContent = '▶ SPY Last Hour';
-        spyBtn.title = 'Replay the most recent hour at 60×';
-    }
-
-    // Sync ticker tab active states
-    const isCustom = activeTicker !== 'SPY' && activeTicker !== 'BTC/USD';
-    document.querySelectorAll('.ticker-tab').forEach(tab => {
-        const isActive = tab.dataset.ticker === activeTicker ||
-                         (tab.dataset.ticker === 'custom' && isCustom);
-        tab.classList.toggle('active', isActive);
-    });
-    const customInput = document.getElementById('customTickerInput');
-    customInput.classList.toggle('hidden', !isCustom);
-    if (isCustom) customInput.value = activeTicker;
-
-    document.getElementById('historicalSectionLabel').textContent = `${activeTicker} Historical Levels`;
-    renderLevelGrid();
-}
-
-function renderLevelGrid() {
-    const grid = document.getElementById('spyLevelGrid');
-    const days = getRecentTradingDays(10);
-    grid.innerHTML = days.map(day => {
-        const label = new Date(day + 'T12:00:00Z')
-            .toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
-
-        const openAvail  = isWindowAvailable(day, 'open');
-        const closeAvail = isWindowAvailable(day, 'close');
-        const fullAvail  = isWindowAvailable(day, 'full');
-
-        const openDis  = !openAvail  ? 'disabled title="Data not yet available"' : '';
-        const closeDis = !closeAvail ? 'disabled title="Data not yet available"' : '';
-        const fullDis  = !fullAvail  ? 'disabled title="Data not yet available"' : '';
-
-        const openCls  = `level-btn${!openAvail  ? ' future-lock' : ''}`;
-        const closeCls = `level-btn${!closeAvail ? ' future-lock' : ''}`;
-        const fullCls  = `level-btn level-btn-full${!fullAvail ? ' future-lock' : ''}`;
-
-        return `<div class="level-row">
-            <span class="level-date">${label}</span>
-            <button class="${openCls}"  ${openDis}  onclick="loadLevel('${day}','open',this)">Open 9:30</button>
-            <button class="${closeCls}" ${closeDis} onclick="loadLevel('${day}','close',this)">Close 3PM</button>
-            <button class="${fullCls}"  ${fullDis}  onclick="loadLevel('${day}','full',this)">Full Day</button>
-        </div>`;
-    }).join('');
+// Read ticker input → activeTicker globals. Defaults to SPY if empty.
+function readTickerFromInput() {
+    const inp = document.getElementById('tickerInput');
+    let val = (inp ? inp.value : 'SPY').trim().toUpperCase() || 'SPY';
+    activeTicker = val;
+    activeTickerIsCrypto = isCryptoTicker(val);
+    localStorage.setItem('nyan_active_ticker', activeTicker);
 }
 
 async function loadLevel(dateStr, win, btn) {
@@ -1299,8 +1242,23 @@ restartBtn.addEventListener('click', () => {
     gameOverScreen.classList.add('hidden');
     showLevelSelect();
 });
-document.getElementById('quickPlayBTCBtn').addEventListener('click', () => startQuickPlay('BTC/USD', true));
-document.getElementById('quickPlaySPYBtn').addEventListener('click', () => startQuickPlay('SPY', false));
+document.getElementById('quickPlayLastOpenBtn').addEventListener('click', async () => {
+    readTickerFromInput();
+    const btn = document.getElementById('quickPlayLastOpenBtn');
+    await loadLevel(lastCompletedOpenDateStr(), 'open', btn);
+});
+document.getElementById('quickPlayLast60Btn').addEventListener('click', () => {
+    readTickerFromInput();
+    startQuickPlay(activeTicker, activeTickerIsCrypto);
+});
+// Pressing Enter in the ticker input fires Last 60 min (most common quick action)
+document.getElementById('tickerInput').addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+        e.preventDefault();
+        readTickerFromInput();
+        startQuickPlay(activeTicker, activeTickerIsCrypto);
+    }
+});
 
 // Speed toast
 const speedToastEl = document.getElementById('speed-toast');
@@ -1571,37 +1529,6 @@ document.getElementById('calTabAll').addEventListener('click', () => {
     renderCalendar();
 });
 
-// Ticker selector tabs
-document.querySelectorAll('.ticker-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-        const tickerVal = tab.dataset.ticker;
-        if (tickerVal === 'custom') {
-            document.getElementById('customTickerInput').classList.remove('hidden');
-            document.getElementById('customTickerInput').focus();
-            document.querySelectorAll('.ticker-tab').forEach(t => t.classList.toggle('active', t === tab));
-        } else {
-            activeTicker = tickerVal;
-            activeTickerIsCrypto = tickerVal === 'BTC/USD';
-            localStorage.setItem('nyan_active_ticker', activeTicker);
-            document.getElementById('customTickerInput').classList.add('hidden');
-            document.getElementById('historicalSectionLabel').textContent = `${activeTicker} Historical Levels`;
-            document.querySelectorAll('.ticker-tab').forEach(t => t.classList.toggle('active', t === tab));
-            renderLevelGrid();
-        }
-    });
-});
-
-document.getElementById('customTickerInput').addEventListener('input', function () {
-    const val = this.value.trim().toUpperCase();
-    this.value = val;
-    if (val.length >= 1) {
-        activeTicker = val;
-        activeTickerIsCrypto = false;
-        localStorage.setItem('nyan_active_ticker', activeTicker);
-        document.getElementById('historicalSectionLabel').textContent = `${activeTicker} Historical Levels`;
-        renderLevelGrid();
-    }
-});
 
 // Init
 resizeCanvas();

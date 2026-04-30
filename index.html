@@ -120,24 +120,17 @@
         <div class="level-select-inner">
             <h2>Select Level</h2>
 
-            <div class="settings-section-label">Quick Play (Simulation)</div>
-            <div class="quickplay-row">
-                <button id="quickPlayBTCBtn">&#9654; BTC/USD Live</button>
-                <button id="quickPlaySPYBtn">&#9654; SPY Live</button>
+            <div class="settings-section-label">Ticker</div>
+            <input type="text" id="tickerInput" value="SPY" placeholder="BTC-USD" maxlength="12">
+
+            <div class="quickplay-row" style="margin-top:8px;">
+                <button id="quickPlayLastOpenBtn">&#9654; Last Open</button>
+                <button id="quickPlayLast60Btn">&#9654; Last 60 min</button>
             </div>
+            <div id="levelSelectStatus"></div>
 
             <div class="settings-section-label" style="margin-top:16px;">Multiplayer</div>
             <button class="mp-race-btn" onclick="if(window.openMpLobby)window.openMpLobby();else alert('Multiplayer loading…')">⚔ Race vs Friend</button>
-
-            <div class="settings-section-label" style="margin-top:16px;" id="historicalSectionLabel">Historical Levels</div>
-            <div class="ticker-selector">
-                <button class="ticker-tab active" data-ticker="SPY">SPY</button>
-                <button class="ticker-tab" data-ticker="BTC/USD">BTC/USD</button>
-                <button class="ticker-tab" data-ticker="custom">+ Custom</button>
-                <input type="text" id="customTickerInput" placeholder="e.g. AAPL" class="hidden" maxlength="10">
-            </div>
-            <div id="levelSelectStatus"></div>
-            <div id="spyLevelGrid"></div>
         </div>
     </div>
 
