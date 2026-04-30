@@ -174,6 +174,60 @@ async function fetchYahooBars(ticker, startSec, endSec) {
     return bars;
 }
 
+// ---- Bar-level cache (localStorage) ----
+// 1-min bars are immutable once they're a few minutes old, so cache them
+// forever (24h ring buffer per ticker). Replays of the same window, or
+// rerunning Quick Play within an hour, become instant — no network call.
+const _BAR_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const _barCacheKey = t => `nyan_bars_v2_${t.replace('/', '_')}`;
+
+function _loadCachedBars(ticker) {
+    try {
+        const raw = localStorage.getItem(_barCacheKey(ticker));
+        if (!raw) return [];
+        const cutoff = Date.now() - _BAR_CACHE_TTL_MS;
+        return JSON.parse(raw).filter(b => new Date(b.t).getTime() >= cutoff);
+    } catch { return []; }
+}
+
+function _saveCachedBars(ticker, bars) {
+    try {
+        const map = new Map();
+        for (const b of bars) map.set(b.t, b);  // dedupe by timestamp
+        const sorted = [...map.values()].sort((a, b) => new Date(a.t) - new Date(b.t));
+        localStorage.setItem(_barCacheKey(ticker), JSON.stringify(sorted));
+    } catch { /* localStorage full / disabled — just skip */ }
+}
+
+// Fetch bars for [startSec, endSec], serving cache for windows whose newest
+// bar is >60 min old. Live/recent windows still fetch (bars within last
+// few minutes can update).
+async function fetchYahooBarsCached(ticker, startSec, endSec) {
+    const startMs = startSec * 1000;
+    const endMs   = endSec * 1000;
+    const cached  = _loadCachedBars(ticker);
+    const inRange = cached.filter(b => {
+        const t = new Date(b.t).getTime();
+        return t >= startMs && t <= endMs;
+    });
+
+    const expectedBars    = Math.max(1, Math.floor((endMs - startMs) / 60000));
+    const isHistorical    = endMs < Date.now() - 60 * 60 * 1000;
+    const hasGoodCoverage = inRange.length >= expectedBars * 0.7;
+
+    // Whole window is older than 60 min and we already have most of it — no network.
+    if (isHistorical && hasGoodCoverage) return inRange;
+
+    // Otherwise fetch from network and merge into cache.
+    const fresh = await fetchYahooBars(ticker, startSec, endSec);
+    if (fresh && fresh.length > 0) {
+        _saveCachedBars(ticker, [...cached, ...fresh]);
+        return fresh;
+    }
+    // Network failed — fall back to cache, even partial.
+    return inRange;
+}
+
 // Latest price = most recent close from a 1-day fetch. Used to seed the chart.
 async function fetchYahooLatestPrice(ticker) {
     const sym = yahooSymbol(ticker);
@@ -210,12 +264,9 @@ function getRecentTradingDays(count) {
     return days;
 }
 
-// Fetch a window of 1-min bars for a date+window from Yahoo. Cached in localStorage.
+// Fetch a window of 1-min bars for a date+window. Bar-level cache makes
+// repeat loads of the same level instant.
 async function fetchBars(symbol, dateStr, win) {
-    const cacheKey = `nyan_bars_${symbol.replace('/', '_')}_${dateStr}_${win}`;
-    const cached = localStorage.getItem(cacheKey);
-    if (cached) { try { return JSON.parse(cached); } catch {} }
-
     // Compute UTC start/end for the requested window. ET → UTC: Mar–Nov = +4 (EDT), else +5 (EST).
     const month = parseInt(dateStr.slice(5, 7), 10);
     const etToUtc = (month >= 3 && month <= 11) ? 4 : 5;
@@ -227,9 +278,7 @@ async function fetchBars(symbol, dateStr, win) {
     const startSec = Math.floor(Date.UTC(y, m - 1, d, startEtH + etToUtc, startEtM) / 1000);
     const endSec   = Math.floor(Date.UTC(y, m - 1, d, endEtH   + etToUtc, endEtM)   / 1000);
 
-    const bars = await fetchYahooBars(symbol, startSec, endSec);
-    if (bars.length > 0) localStorage.setItem(cacheKey, JSON.stringify(bars));
-    return bars;
+    return await fetchYahooBarsCached(symbol, startSec, endSec);
 }
 
 async function fetchLatestPrice(symbol /*, isCrypto */) {
@@ -370,9 +419,10 @@ async function startQuickPlay(ticker, isCrypto) {
     if (statusEl) statusEl.textContent = `Fetching ${activeTicker} last hour…`;
 
     // Last-hour replay at 60× — fetch the most recent ~65 min of 1-min bars from Yahoo.
+    // Goes through the bar cache: anything >60min old is served instantly.
     const endSec   = Math.floor(Date.now() / 1000);
     const startSec = endSec - 65 * 60;
-    const bars = await fetchYahooBars(activeTicker, startSec, endSec);
+    const bars = await fetchYahooBarsCached(activeTicker, startSec, endSec);
     if (!bars || bars.length < 2) {
         if (statusEl) statusEl.textContent = `No recent data for ${activeTicker} (market closed?)`;
         return;
