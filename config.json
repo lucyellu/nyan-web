@@ -1,0 +1,13 @@
+{
+  "seat_secrets": ["", "", ""],
+  "firebase": {
+    "apiKey": "AIzaSyDAe8yY3-A5eDXsWYwXMt4N_CfjxtrIl_w",
+    "authDomain": "games-8d8a6.firebaseapp.com",
+    "projectId": "games-8d8a6",
+    "storageBucket": "games-8d8a6.firebasestorage.app",
+    "messagingSenderId": "467484947066",
+    "appId": "1:467484947066:web:781dd2fcd8020397d041c3",
+    "measurementId": "G-R1EBRVJ19L",
+    "databaseURL": "https://games-8d8a6-default-rtdb.firebaseio.com"
+  }
+}

@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Nyan Cat: Web Recreation</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="hud">
+        <div id="liveIndicator"><span class="dot">●</span> SPY</div>
+        <div class="hud-item" id="portfolioBoard">
+            Portfolio: <span id="portfolioValue">$1,000,000.00</span>
+            <div id="pnlStats">
+                <span id="pnlDollar">+$0.00</span> (<span id="pnlPercent">0.00%</span>)
+            </div>
+        </div>
+        <div class="hud-item" id="livesBoard">Drawdown: <span id="lives">❤️❤️❤️</span></div>
+        <div class="hud-item" id="timerBoard">Session: <span id="timer">00:00</span></div>
+        <div id="seat-scoreboard" class="hud-item"></div>
+        <div class="hud-item" id="settingsSelector">
+            <button id="settingsBtn">⚙️ Settings</button>
+        </div>
+        <div class="hud-item" id="calendarSelector">
+            <button id="calendarBtn">&#128197; Board</button>
+        </div>
+        <div class="hud-item" id="musicSelector">
+            Music:
+            <select id="bgMusicSelect">
+                <option value="assets/music.mp3">Original</option>
+                <option value="assets/music_2_slowreverb.wav">Slowed + Reverb</option>
+                <option value="assets/music_3_piano.wav">Piano</option>
+            </select>
+        </div>
+    </div>
+
+    <div id="progress-container">
+        <div id="progress-bar"></div>
+        <div id="progress-thumb"></div>
+    </div>
+
+    <div id="main-area">
+        <div id="canvas-container">
+            <canvas id="gameCanvas"></canvas>
+
+        <!-- Speed toast — pops up when speed settles -->
+        <div id="speed-toast"></div>
+
+        <!-- Speed control — vertical bar on left, only visible in SPY mode -->
+        <div id="speedControl" style="display:none;">
+            <span id="speedLabel">60x</span>
+            <div class="speed-slider-wrap">
+                <input type="range" id="speedSlider" min="1" max="120" value="60">
+            </div>
+            <span class="speed-label-txt">SPD</span>
+        </div>
+        </div>
+        <div id="side-panel">
+            <h3>Time &amp; Sales</h3>
+            <div id="tape-toggles">
+                <button class="tape-toggle active" data-col="time" title="Toggle Time">Time</button>
+                <button class="tape-toggle active" data-col="side" title="Toggle Side">Side</button>
+                <button class="tape-toggle active" data-col="qty" title="Toggle Qty">Qty</button>
+                <button class="tape-toggle" data-col="price" title="Toggle Price">Price</button>
+                <button class="tape-toggle active" data-col="pnl" title="Toggle P&amp;L">P&amp;L</button>
+            </div>
+            <div id="timeAndSales" class="hide-price">
+                <div class="tape-header">
+                    <span class="col-time">Time</span>
+                    <span class="col-side">Side</span>
+                    <span class="col-qty">Qty</span>
+                    <span class="col-price">Price</span>
+                    <span class="col-pnl">P&amp;L</span>
+                </div>
+                <ul id="tapeList"></ul>
+            </div>
+        </div>
+    </div>
+
+    <div id="mobile-controls">
+        <button class="mobile-btn" id="mobileSellBtn">▼ SELL</button>
+        <button class="mobile-btn" id="mobileSellAllBtn">EXIT ALL</button>
+        <button class="mobile-btn" id="mobileBuyBtn">▲ BUY</button>
+    </div>
+
+    <!-- Overlays -->
+    <div id="settingsModal" class="hidden">
+        <div class="modal-content">
+            <h2>Game Settings</h2>
+
+            <div class="settings-section-label">Trading</div>
+            <div class="setting-item">
+                <label for="startingPortfolio">Starting Portfolio ($):</label>
+                <input type="number" id="startingPortfolio" value="1000000" step="10000">
+            </div>
+            <div class="setting-item">
+                <label for="tradeAllocation">Trade Allocation (%):</label>
+                <input type="number" id="tradeAllocation" value="10" step="5" min="5" max="100">
+            </div>
+            <div class="setting-item">
+                <label for="moveOnlyDown">↓ / S = Move only (no sell):</label>
+                <input type="checkbox" id="moveOnlyDown">
+            </div>
+
+            <div class="settings-section-label">Audio</div>
+            <div class="setting-item">
+                <label for="muteMusic">Mute Music:</label>
+                <input type="checkbox" id="muteMusic">
+            </div>
+            <div class="setting-item">
+                <label for="muteSFX">Mute SFX (N/A):</label>
+                <input type="checkbox" id="muteSFX" disabled>
+            </div>
+            <button id="saveSettingsBtn">Save &amp; Close</button>
+        </div>
+    </div>
+
+    <div id="levelSelect" class="hidden">
+        <div class="level-select-inner">
+            <h2>Select Level</h2>
+
+            <div class="settings-section-label">Quick Play (Simulation)</div>
+            <div class="quickplay-row">
+                <button id="quickPlayBTCBtn">&#9654; BTC/USD Live</button>
+                <button id="quickPlaySPYBtn">&#9654; SPY Live</button>
+            </div>
+
+            <div class="settings-section-label" style="margin-top:16px;">Multiplayer</div>
+            <button class="mp-race-btn" onclick="if(window.openMpLobby)window.openMpLobby();else alert('Multiplayer loading…')">⚔ Race vs Friend</button>
+
+            <div class="settings-section-label" style="margin-top:16px;" id="historicalSectionLabel">Historical Levels</div>
+            <div class="ticker-selector">
+                <button class="ticker-tab active" data-ticker="SPY">SPY</button>
+                <button class="ticker-tab" data-ticker="BTC/USD">BTC/USD</button>
+                <button class="ticker-tab" data-ticker="custom">+ Custom</button>
+                <input type="text" id="customTickerInput" placeholder="e.g. AAPL" class="hidden" maxlength="10">
+            </div>
+            <div id="levelSelectStatus"></div>
+            <div id="spyLevelGrid"></div>
+        </div>
+    </div>
+
+    <div id="gameOver" class="hidden">
+        <h2 id="gameOverTitle">Game Over!</h2>
+
+        <div id="resultSummary">
+            <div id="resultAmount"></div>
+            <div id="leaderboardPosition"></div>
+            <div id="resultMessage"></div>
+        </div>
+
+        <p>Final Portfolio: <span id="finalScore">$0.00</span></p>
+        <p>Time Lasted: <span id="finalTime">0s</span></p>
+
+        <div id="leaderboard">
+            <h3>Wall of Fame (Top Profits)</h3>
+            <ul id="highScores"></ul>
+        </div>
+
+        <button id="restartBtn">New Session</button>
+    </div>
+
+    <!-- Calendar / Leaderboard Modal -->
+    <div id="calendarModal" class="hidden">
+        <div class="calendar-inner">
+            <div class="cal-nav">
+                <button class="cal-nav-btn" id="calPrevMonth">&#9664;</button>
+                <span id="calMonthLabel"></span>
+                <button class="cal-nav-btn" id="calNextMonth">&#9654;</button>
+                <button class="cal-close-btn" id="calCloseBtn">&#10005;</button>
+            </div>
+            <div class="cal-tabs">
+                <button class="cal-tab active" id="calTabMonthly">Monthly View</button>
+                <button class="cal-tab" id="calTabAll">All Sessions</button>
+            </div>
+            <div id="calGrid"></div>
+            <div id="calDayDetail" class="hidden"></div>
+            <div id="calAllSessions" class="hidden"></div>
+        </div>
+    </div>
+
+    <canvas id="confettiCanvas"></canvas>
+
+    <!-- Multiplayer Lobby -->
+    <div id="mpLobby" class="hidden">
+        <div class="mp-lobby-card">
+            <button class="mp-close-btn" onclick="if(window.closeMpLobby)window.closeMpLobby()">&#10005;</button>
+
+            <!-- Step 1: Create / join -->
+            <div id="mpJoinStep" class="hidden">
+                <h2>&#9876; Race vs Friend</h2>
+                <div class="mp-field" style="margin-top:12px">
+                    <label>Your display name</label>
+                    <input type="text" id="mpNameInput" maxlength="12" placeholder="Player 1">
+                </div>
+                <div class="mp-create-join">
+                    <button id="mpCreateBtn" class="mp-primary-btn">Create Room</button>
+                    <div class="mp-or">— or join —</div>
+                    <div class="mp-join-row">
+                        <input type="text" id="mpCodeInput" maxlength="4" placeholder="ABCD">
+                        <button id="mpJoinBtn" class="mp-primary-btn" style="width:auto;padding:9px 18px;margin-top:0">Join &#8594;</button>
+                    </div>
+                </div>
+                <div id="mpJoinStatus" class="mp-status"></div>
+            </div>
+
+            <!-- Step 3: Lobby / waiting room -->
+            <div id="mpRoomStep" class="hidden">
+                <div class="mp-room-header">
+                    <h2>Room <span id="mpRoomCode" class="mp-room-code"></span></h2>
+                    <button id="mpCopyLinkBtn" class="mp-link-btn">&#128203; Copy link</button>
+                </div>
+                <div id="mpPlayerList" class="mp-player-list"></div>
+                <div id="mpLobbyStatus" class="mp-status"></div>
+                <button id="mpReadyBtn" class="mp-primary-btn">Ready &#10003;</button>
+                <button id="mpLeaveBtn" class="mp-link-btn" style="display:block;margin-top:10px;text-align:center;width:100%">Leave room</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="game.js"></script>
+    <script type="module" src="multiplayer.js"></script>
+</body>
+</html>

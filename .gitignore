@@ -1,0 +1,11 @@
+bridge/node_modules/
+config.local.json
+.env
+.env.*
+__pycache__/
+*.pyc
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+trades/

@@ -1,0 +1,13 @@
+{
+  "name": "nyan-ib-bridge",
+  "version": "1.0.0",
+  "description": "IBKR TWS bridge for Nyan Cat trading game",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "@stoqey/ib": "^1.0.18",
+    "ws": "^8.16.0"
+  }
+}

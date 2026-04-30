@@ -1,0 +1,860 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>IBKR Assistant</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0c0f;
+    --bg2: #111418;
+    --bg3: #181c22;
+    --border: rgba(255,255,255,0.07);
+    --border2: rgba(255,255,255,0.12);
+    --text: #e8eaed;
+    --muted: #7a8494;
+    --accent: #00d4a8;
+    --accent2: #0099ff;
+    --red: #ff4d6a;
+    --green: #00d4a8;
+    --amber: #f5a623;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 13px;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 14px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+  }
+
+  .logo {
+    font-family: var(--mono);
+    font-size: 12px;
+    letter-spacing: 0.12em;
+    color: var(--accent);
+    text-transform: uppercase;
+    font-weight: 500;
+  }
+
+  .status-pill {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--muted);
+    padding: 4px 10px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+  }
+
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: var(--red);
+    transition: background 0.3s;
+  }
+  .dot.connected { background: var(--green); }
+
+  .main {
+    display: grid;
+    grid-template-columns: 1fr 340px;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .left {
+    overflow-y: auto;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .right {
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg2);
+  }
+
+  .stat-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 10px;
+  }
+
+  .stat-card {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px 16px;
+  }
+
+  .stat-label {
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--muted);
+    text-transform: uppercase;
+    font-family: var(--mono);
+    margin-bottom: 8px;
+  }
+
+  .stat-value {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 500;
+  }
+
+  .stat-sub {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: var(--mono);
+    margin-top: 4px;
+  }
+
+  .pos-green { color: var(--green); }
+  .pos-red { color: var(--red); }
+
+  .section-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+
+  .section-title {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  .refresh-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--muted);
+    background: none;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 3px 8px;
+    cursor: pointer;
+    transition: color 0.2s, border-color 0.2s;
+  }
+  .refresh-btn:hover { color: var(--accent); border-color: var(--accent); }
+
+  .positions-table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  .positions-table th {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    text-align: left;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    font-weight: 400;
+  }
+
+  .positions-table th:not(:first-child) { text-align: right; }
+
+  .positions-table td {
+    padding: 10px 10px;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 12px;
+  }
+
+  .positions-table td:not(:first-child) { text-align: right; }
+
+  .positions-table tbody tr {
+    transition: background 0.15s;
+    cursor: pointer;
+  }
+
+  .positions-table tbody tr:hover { background: rgba(255,255,255,0.03); }
+
+  .ticker {
+    font-weight: 500;
+    color: var(--text);
+  }
+
+  .type-badge {
+    font-size: 9px;
+    letter-spacing: 0.06em;
+    padding: 2px 6px;
+    border-radius: 3px;
+    text-transform: uppercase;
+    font-family: var(--mono);
+    margin-left: 6px;
+  }
+
+  .badge-opt { background: rgba(0,153,255,0.12); color: var(--accent2); border: 1px solid rgba(0,153,255,0.2); }
+  .badge-eq { background: rgba(0,212,168,0.08); color: var(--green); border: 1px solid rgba(0,212,168,0.15); }
+
+  .bar-bg {
+    width: 60px;
+    height: 3px;
+    background: var(--border2);
+    border-radius: 2px;
+    display: inline-block;
+    vertical-align: middle;
+    margin-left: 6px;
+  }
+
+  .bar-fill {
+    height: 100%;
+    border-radius: 2px;
+  }
+
+  .greek-row {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+
+  .greek-card {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: center;
+  }
+
+  .greek-name {
+    font-size: 10px;
+    color: var(--muted);
+    font-family: var(--mono);
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+  }
+
+  .greek-val {
+    font-family: var(--mono);
+    font-size: 15px;
+    font-weight: 500;
+  }
+
+  .chat-header {
+    padding: 14px 16px;
+    border-bottom: 1px solid var(--border);
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  .chat-messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .msg {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-width: 100%;
+  }
+
+  .msg-role {
+    font-size: 9px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-family: var(--mono);
+  }
+
+  .msg-bubble {
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.6;
+  }
+
+  .msg-user .msg-bubble {
+    background: rgba(0,153,255,0.1);
+    border: 1px solid rgba(0,153,255,0.15);
+    color: var(--text);
+  }
+
+  .msg-assistant .msg-bubble {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  .msg-system .msg-bubble {
+    background: rgba(0,212,168,0.06);
+    border: 1px solid rgba(0,212,168,0.12);
+    color: var(--accent);
+    font-family: var(--mono);
+    font-size: 11px;
+  }
+
+  .chat-input-area {
+    padding: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .suggestion-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+
+  .chip {
+    font-size: 10px;
+    font-family: var(--mono);
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    cursor: pointer;
+    color: var(--muted);
+    transition: all 0.15s;
+    white-space: nowrap;
+    background: none;
+  }
+
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+
+  .input-row {
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+  }
+
+  textarea {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 12px;
+    padding: 9px 12px;
+    resize: none;
+    outline: none;
+    line-height: 1.5;
+    transition: border-color 0.2s;
+    min-height: 38px;
+    max-height: 120px;
+  }
+
+  textarea:focus { border-color: var(--border2); }
+  textarea::placeholder { color: var(--muted); }
+
+  .send-btn {
+    background: var(--accent);
+    border: none;
+    border-radius: 8px;
+    width: 36px;
+    height: 36px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    transition: opacity 0.2s;
+  }
+
+  .send-btn:hover { opacity: 0.85; }
+  .send-btn:disabled { opacity: 0.35; cursor: not-allowed; }
+
+  .send-btn svg { fill: #0a0c0f; width: 15px; height: 15px; }
+
+  .empty-state {
+    text-align: center;
+    padding: 40px 20px;
+    color: var(--muted);
+    font-family: var(--mono);
+    font-size: 11px;
+    line-height: 2;
+  }
+
+  .connecting-notice {
+    background: rgba(245,166,35,0.06);
+    border: 1px solid rgba(245,166,35,0.15);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--amber);
+    line-height: 1.8;
+  }
+
+  .connecting-notice strong { display: block; margin-bottom: 6px; font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase; }
+
+  .action-row {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-top: 8px;
+  }
+
+  .action-btn {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 5px 12px;
+    border-radius: 5px;
+    border: 1px solid var(--border2);
+    background: none;
+    color: var(--text);
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .action-btn:hover { background: var(--bg3); border-color: var(--accent); color: var(--accent); }
+  .action-btn.danger:hover { border-color: var(--red); color: var(--red); }
+
+  .loading-dots {
+    display: inline-flex;
+    gap: 3px;
+    align-items: center;
+  }
+
+  .loading-dots span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: var(--muted);
+    animation: blink 1.2s infinite;
+  }
+
+  .loading-dots span:nth-child(2) { animation-delay: 0.2s; }
+  .loading-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes blink {
+    0%, 80%, 100% { opacity: 0.2; }
+    40% { opacity: 1; }
+  }
+
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border2); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="logo">IBKR Assistant</div>
+  <div style="display:flex;gap:12px;align-items:center;">
+    <div class="status-pill">
+      <div class="dot" id="dot"></div>
+      <span id="status-text">Disconnected</span>
+    </div>
+    <div class="status-pill" id="account-pill" style="display:none;">
+      <span id="account-label">—</span>
+    </div>
+  </div>
+</header>
+
+<div class="main">
+  <div class="left" id="left-panel">
+    <div id="connect-notice" class="connecting-notice">
+      <strong>Setup required</strong>
+      1. Make sure TWS is open and API is enabled (File → Global Config → API → Enable ActiveX)<br>
+      2. Run the local Python bridge: <code style="color:#e8eaed;">python ibkr_bridge.py</code><br>
+      3. Default port: 7497 (live) or 7496 (paper)
+    </div>
+
+    <div>
+      <div class="section-header">
+        <div class="section-title">Account Summary</div>
+        <button class="refresh-btn" onclick="loadPortfolio()">↻ Refresh</button>
+      </div>
+      <div class="stat-row" id="stat-row">
+        <div class="stat-card">
+          <div class="stat-label">Net Liquidation</div>
+          <div class="stat-value" id="nlv">—</div>
+          <div class="stat-sub" id="nlv-sub">awaiting connection</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Day P&L</div>
+          <div class="stat-value" id="daypnl">—</div>
+          <div class="stat-sub" id="daypnl-pct">—</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Unrealized P&L</div>
+          <div class="stat-value" id="upnl">—</div>
+          <div class="stat-sub" id="upnl-sub">open positions</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Buying Power</div>
+          <div class="stat-value" id="bpower">—</div>
+          <div class="stat-sub" id="bpower-sub">available</div>
+        </div>
+      </div>
+    </div>
+
+    <div id="greeks-section" style="display:none;">
+      <div class="section-header">
+        <div class="section-title">Portfolio Greeks (Options)</div>
+      </div>
+      <div class="greek-row">
+        <div class="greek-card"><div class="greek-name">Delta</div><div class="greek-val" id="g-delta">—</div></div>
+        <div class="greek-card"><div class="greek-name">Gamma</div><div class="greek-val" id="g-gamma">—</div></div>
+        <div class="greek-card"><div class="greek-name">Theta</div><div class="greek-val" id="g-theta">—</div></div>
+        <div class="greek-card"><div class="greek-name">Vega</div><div class="greek-val" id="g-vega">—</div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="section-header">
+        <div class="section-title">Positions</div>
+        <span style="font-family:var(--mono);font-size:10px;color:var(--muted);" id="pos-count">—</span>
+      </div>
+      <div id="positions-wrap">
+        <div class="empty-state">No positions loaded.<br>Connect the bridge and click Refresh.</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="chat-header">Trading Assistant</div>
+    <div class="chat-messages" id="chat"></div>
+    <div class="chat-input-area">
+      <div class="suggestion-chips" id="chips">
+        <button class="chip" onclick="useSuggestion(this)">Show all positions</button>
+        <button class="chip" onclick="useSuggestion(this)">Best SPY puts for protection</button>
+        <button class="chip" onclick="useSuggestion(this)">What's my total delta?</button>
+        <button class="chip" onclick="useSuggestion(this)">Close all losing positions</button>
+        <button class="chip" onclick="useSuggestion(this)">Roll my calls up a strike</button>
+      </div>
+      <div class="input-row">
+        <textarea id="input" placeholder="Ask anything about your portfolio..." rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+        <button class="send-btn" id="send-btn" onclick="send()">
+          <svg viewBox="0 0 24 24"><path d="M2 21L23 12 2 3v7l15 2-15 2z"/></svg>
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const BRIDGE = 'http://localhost:8765';
+const API_URL = 'https://api.anthropic.com/v1/messages';
+
+let portfolio = { positions: [], account: {} };
+let messages = [];
+let connected = false;
+
+async function checkConnection() {
+  try {
+    const r = await fetch(`${BRIDGE}/status`, { signal: AbortSignal.timeout(2000) });
+    const d = await r.json();
+    connected = d.connected;
+    document.getElementById('dot').className = 'dot' + (connected ? ' connected' : '');
+    document.getElementById('status-text').textContent = connected ? 'TWS Connected' : 'Bridge Running — TWS Offline';
+    if (d.account) {
+      const pill = document.getElementById('account-pill');
+      pill.style.display = 'flex';
+      document.getElementById('account-label').textContent = d.account;
+    }
+    if (connected) {
+      document.getElementById('connect-notice').style.display = 'none';
+      loadPortfolio();
+    }
+  } catch {
+    connected = false;
+    document.getElementById('dot').className = 'dot';
+    document.getElementById('status-text').textContent = 'Bridge Offline';
+  }
+}
+
+async function loadPortfolio() {
+  if (!connected) return;
+  try {
+    const r = await fetch(`${BRIDGE}/portfolio`);
+    const d = await r.json();
+    portfolio = d;
+    renderPortfolio(d);
+  } catch(e) {
+    console.error('Portfolio load failed', e);
+  }
+}
+
+function fmt(n, decimals=2) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return new Intl.NumberFormat('en-US', { minimumFractionDigits: decimals, maximumFractionDigits: decimals }).format(n);
+}
+
+function fmtMoney(n) {
+  if (n === null || n === undefined || isNaN(n)) return '—';
+  return '$' + new Intl.NumberFormat('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 }).format(n);
+}
+
+function colorClass(n) { return n >= 0 ? 'pos-green' : 'pos-red'; }
+
+function renderPortfolio(d) {
+  const a = d.account || {};
+
+  const nlv = parseFloat(a.NetLiquidation || 0);
+  const daypnl = parseFloat(a.DailyPnL || 0);
+  const upnl = parseFloat(a.UnrealizedPnL || 0);
+  const bp = parseFloat(a.BuyingPower || 0);
+  const daypct = nlv ? (daypnl / (nlv - daypnl) * 100) : 0;
+
+  document.getElementById('nlv').textContent = fmtMoney(nlv);
+  document.getElementById('nlv').className = 'stat-value';
+  document.getElementById('nlv-sub').textContent = 'net liquidation';
+
+  const daypnlEl = document.getElementById('daypnl');
+  daypnlEl.textContent = (daypnl >= 0 ? '+' : '') + fmtMoney(daypnl);
+  daypnlEl.className = 'stat-value ' + colorClass(daypnl);
+  document.getElementById('daypnl-pct').textContent = (daypct >= 0 ? '+' : '') + fmt(daypct, 2) + '%';
+
+  const upnlEl = document.getElementById('upnl');
+  upnlEl.textContent = (upnl >= 0 ? '+' : '') + fmtMoney(upnl);
+  upnlEl.className = 'stat-value ' + colorClass(upnl);
+
+  document.getElementById('bpower').textContent = fmtMoney(bp);
+
+  const positions = d.positions || [];
+  document.getElementById('pos-count').textContent = positions.length + ' positions';
+
+  const hasOptions = positions.some(p => p.secType === 'OPT');
+  if (hasOptions) {
+    let totDelta = 0, totGamma = 0, totTheta = 0, totVega = 0;
+    positions.filter(p => p.secType === 'OPT').forEach(p => {
+      const mult = (p.secType === 'OPT' ? 100 : 1) * p.position;
+      totDelta += (p.delta || 0) * mult;
+      totGamma += (p.gamma || 0) * mult;
+      totTheta += (p.theta || 0) * mult;
+      totVega  += (p.vega  || 0) * mult;
+    });
+    document.getElementById('greeks-section').style.display = 'block';
+    document.getElementById('g-delta').textContent = fmt(totDelta, 1);
+    document.getElementById('g-gamma').textContent = fmt(totGamma, 2);
+    document.getElementById('g-theta').textContent = fmt(totTheta, 1);
+    document.getElementById('g-vega').textContent = fmt(totVega, 1);
+  }
+
+  if (!positions.length) {
+    document.getElementById('positions-wrap').innerHTML = '<div class="empty-state">No open positions.</div>';
+    return;
+  }
+
+  const maxAbsPnl = Math.max(...positions.map(p => Math.abs(p.unrealizedPnl || 0)));
+
+  const rows = positions.map(p => {
+    const pnl = p.unrealizedPnl || 0;
+    const barW = maxAbsPnl ? Math.abs(pnl) / maxAbsPnl * 60 : 0;
+    const barColor = pnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const badge = p.secType === 'OPT'
+      ? `<span class="type-badge badge-opt">${p.right || 'OPT'}</span>`
+      : `<span class="type-badge badge-eq">EQ</span>`;
+    const desc = p.secType === 'OPT'
+      ? `${p.expiry || ''} $${p.strike || ''}`
+      : p.exchange || '';
+    return `<tr onclick="selectPosition('${p.symbol}')">
+      <td><span class="ticker">${p.symbol}</span>${badge}<br><span style="font-size:10px;color:var(--muted);">${desc}</span></td>
+      <td>${fmt(p.position, 0)}</td>
+      <td>${fmtMoney(p.avgCost)}</td>
+      <td>${fmtMoney(p.marketPrice)}</td>
+      <td class="${colorClass(pnl)}">${pnl >= 0 ? '+' : ''}${fmtMoney(pnl)}<div class="bar-bg"><div class="bar-fill" style="width:${barW.toFixed(1)}px;background:${barColor};"></div></div></td>
+      <td class="${colorClass(pnl)}" style="font-size:11px;">${p.pnlPct !== undefined ? (pnl >= 0 ? '+' : '') + fmt(p.pnlPct, 1) + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+
+  document.getElementById('positions-wrap').innerHTML = `
+    <table class="positions-table">
+      <thead>
+        <tr>
+          <th>Symbol</th>
+          <th>Qty</th>
+          <th>Avg Cost</th>
+          <th>Last</th>
+          <th>Unreal P&L</th>
+          <th>%</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function selectPosition(sym) {
+  document.getElementById('input').value = `Tell me more about my ${sym} position and what I should consider`;
+  document.getElementById('input').focus();
+}
+
+function buildSystemPrompt() {
+  const posStr = JSON.stringify(portfolio.positions || [], null, 2);
+  const accStr = JSON.stringify(portfolio.account || {}, null, 2);
+  return `You are a sharp, concise trading assistant with direct access to the user's IBKR portfolio.
+
+Current portfolio data:
+ACCOUNT: ${accStr}
+POSITIONS: ${posStr}
+
+You can:
+- Analyze positions, P&L, Greeks
+- Suggest specific options contracts (pick best strikes/expiries)
+- Generate trade ideas (state them clearly as suggestions)
+- Explain risk, breakevens, max loss/gain
+- Suggest adjustments to existing positions
+
+When the user wants to execute something, output a JSON action block like:
+\`\`\`action
+{"type": "order", "symbol": "...", "action": "BUY|SELL", "quantity": N, "orderType": "MKT|LMT", "price": optional}
+\`\`\`
+
+Be direct and specific. No fluff. Use numbers. Think like a prop desk trader.`;
+}
+
+async function send() {
+  const input = document.getElementById('input');
+  const text = input.value.trim();
+  if (!text) return;
+
+  input.value = '';
+  autoResize(input);
+
+  addMessage('user', text);
+  messages.push({ role: 'user', content: text });
+
+  const loadingId = addMessage('assistant', null, true);
+  document.getElementById('send-btn').disabled = true;
+
+  try {
+    const res = await fetch(API_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-20250514',
+        max_tokens: 1000,
+        system: buildSystemPrompt(),
+        messages: messages
+      })
+    });
+
+    const data = await res.json();
+    const reply = data.content?.[0]?.text || 'No response.';
+    messages.push({ role: 'assistant', content: reply });
+
+    removeMessage(loadingId);
+    const msgId = addMessage('assistant', reply);
+
+    const actionMatch = reply.match(/```action\n([\s\S]*?)```/);
+    if (actionMatch) {
+      try {
+        const action = JSON.parse(actionMatch[1]);
+        addActionButtons(msgId, action);
+      } catch {}
+    }
+  } catch(e) {
+    removeMessage(loadingId);
+    addMessage('system', 'Error: ' + e.message);
+  }
+
+  document.getElementById('send-btn').disabled = false;
+}
+
+let msgIdCounter = 0;
+
+function addMessage(role, text, loading=false) {
+  const id = 'msg-' + (++msgIdCounter);
+  const chat = document.getElementById('chat');
+  const el = document.createElement('div');
+  el.className = `msg msg-${role}`;
+  el.id = id;
+
+  const roleLabel = role === 'user' ? 'You' : role === 'assistant' ? 'Assistant' : 'System';
+
+  if (loading) {
+    el.innerHTML = `<div class="msg-role">${roleLabel}</div>
+      <div class="msg-bubble"><div class="loading-dots"><span></span><span></span><span></span></div></div>`;
+  } else {
+    const formatted = (text || '').replace(/```action[\s\S]*?```/g, '').replace(/\n/g, '<br>');
+    el.innerHTML = `<div class="msg-role">${roleLabel}</div><div class="msg-bubble">${formatted}</div>`;
+  }
+
+  chat.appendChild(el);
+  chat.scrollTop = chat.scrollHeight;
+  return id;
+}
+
+function addActionButtons(msgId, action) {
+  const el = document.getElementById(msgId);
+  if (!el) return;
+  const row = document.createElement('div');
+  row.className = 'action-row';
+  row.innerHTML = `
+    <button class="action-btn" onclick="executeAction(${JSON.stringify(action).replace(/"/g,'&quot;')})">
+      ↗ Execute ${action.action} ${action.quantity} ${action.symbol}
+    </button>
+    <button class="action-btn danger" onclick="this.parentElement.remove()">Dismiss</button>`;
+  el.appendChild(row);
+}
+
+async function executeAction(action) {
+  if (!connected) {
+    addMessage('system', 'Not connected to TWS. Start the bridge first.');
+    return;
+  }
+  try {
+    const r = await fetch(`${BRIDGE}/order`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(action)
+    });
+    const d = await r.json();
+    addMessage('system', d.success ? `Order placed: ${d.orderId}` : `Order failed: ${d.error}`);
+    setTimeout(loadPortfolio, 2000);
+  } catch(e) {
+    addMessage('system', 'Bridge error: ' + e.message);
+  }
+}
+
+function removeMessage(id) {
+  document.getElementById(id)?.remove();
+}
+
+function useSuggestion(btn) {
+  document.getElementById('input').value = btn.textContent;
+  send();
+}
+
+function handleKey(e) {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+checkConnection();
+setInterval(checkConnection, 10000);
+</script>
+</body>
+</html>

@@ -1,0 +1,1535 @@
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const gameOverScreen = document.getElementById('gameOver');
+const finalScoreElement = document.getElementById('finalScore');
+const restartBtn = document.getElementById('restartBtn');
+const musicSelect = document.getElementById('bgMusicSelect');
+const tapeList = document.getElementById('tapeList');
+
+// UI Elements
+const portfolioElement = document.getElementById('portfolioValue');
+const pnlDollarElement = document.getElementById('pnlDollar');
+const pnlPercentElement = document.getElementById('pnlPercent');
+const livesElement = document.getElementById('lives');
+const timerElement = document.getElementById('timer');
+const progressBar = document.getElementById('progress-bar');
+const progressThumb = document.getElementById('progress-thumb');
+const progressContainer = document.getElementById('progress-container');
+const highScoresList = document.getElementById('highScores');
+const finalTimeElement = document.getElementById('finalTime');
+
+// ---- Virtual paper trading (no API keys needed) ----
+// Prices fetched from Yahoo Finance via CORS proxy chain; portfolio is local.
+
+// Settings Elements
+const settingsBtn = document.getElementById('settingsBtn');
+const settingsModal = document.getElementById('settingsModal');
+const saveSettingsBtn = document.getElementById('saveSettingsBtn');
+const startingPortfolioInput = document.getElementById('startingPortfolio');
+const tradeAllocationInput = document.getElementById('tradeAllocation');
+const muteMusicCheckbox = document.getElementById('muteMusic');
+
+// Load Assets
+const nyanFrames = [];
+const frameCount = 6;
+for (let i = 1; i <= frameCount; i++) {
+    const img = new Image();
+    img.src = `assets/nyan${i}.svg`;
+    nyanFrames.push(img);
+}
+
+const btcIcon = new Image();
+btcIcon.src = 'assets/btc.svg';
+
+// Game Variables
+let frames = 0;
+let START_PORTFOLIO = parseFloat(localStorage.getItem('nyan_start_portfolio')) || 1000000.00;
+let TRADE_ALLOCATION = parseFloat(localStorage.getItem('nyan_trade_allocation')) || 10;
+let isMuted       = localStorage.getItem('nyan_muted') === 'true';
+let moveOnlyDown  = localStorage.getItem('nyan_move_only_down') === 'true';
+let activeTicker  = localStorage.getItem('nyan_active_ticker') || 'SPY';
+let activeTickerIsCrypto = activeTicker === 'BTC/USD';
+
+let portfolioAmount = START_PORTFOLIO;
+let livesCount = 3;
+let isGameOver = false;
+let isPaused = false;
+let musicStarted = false;
+let LEVEL_DURATION = 7200;
+
+// Initialize Settings UI
+startingPortfolioInput.value = START_PORTFOLIO;
+tradeAllocationInput.value = TRADE_ALLOCATION;
+muteMusicCheckbox.checked = isMuted;
+document.getElementById('moveOnlyDown').checked = moveOnlyDown;
+
+let bgMusic = new Audio(musicSelect.value);
+bgMusic.loop = true;
+bgMusic.volume = isMuted ? 0 : 0.5;
+
+musicSelect.addEventListener('change', () => {
+    const wasPlaying = !bgMusic.paused;
+    bgMusic.pause();
+    bgMusic = new Audio(musicSelect.value);
+    bgMusic.loop = true;
+    bgMusic.volume = isMuted ? 0 : 0.5;
+    if (wasPlaying && musicStarted) bgMusic.play();
+});
+
+// Settings Logic
+settingsBtn.addEventListener('click', () => {
+    isPaused = true;
+    bgMusic.pause();
+    renderSeatSettings();
+    settingsModal.classList.remove('hidden');
+});
+
+saveSettingsBtn.addEventListener('click', () => {
+    START_PORTFOLIO = parseFloat(startingPortfolioInput.value) || 1000000.00;
+    localStorage.setItem('nyan_start_portfolio', START_PORTFOLIO);
+    TRADE_ALLOCATION = parseFloat(tradeAllocationInput.value) || 10;
+    isMuted          = muteMusicCheckbox.checked;
+    moveOnlyDown     = document.getElementById('moveOnlyDown').checked;
+    localStorage.setItem('nyan_move_only_down', moveOnlyDown);
+    localStorage.setItem('nyan_trade_allocation', TRADE_ALLOCATION);
+    localStorage.setItem('nyan_muted',            isMuted);
+
+    bgMusic.volume = isMuted ? 0 : 0.5;
+    settingsModal.classList.add('hidden');
+    isPaused = false;
+    if (musicStarted && !isGameOver) bgMusic.play();
+
+    if (frames === 0) {
+        portfolioAmount = START_PORTFOLIO;
+        updateHUD();
+    }
+});
+
+// ---- Live data layer (Yahoo Finance via CORS proxy — no API keys needed) ----
+let livePrice = null;
+window.opponentState = null;  // set by multiplayer.js
+
+const liveIndicatorEl = document.getElementById('liveIndicator');
+
+function setIndicator(label, color, ticker) {
+    const dotStyle = color ? `style="color:${color}"` : '';
+    const t = ticker !== undefined ? ticker : (typeof activeTicker !== 'undefined' ? activeTicker : 'SPY');
+    liveIndicatorEl.innerHTML = `<span class="dot" ${dotStyle}>●</span> ${t}${label ? ' — ' + label : ''}`;
+}
+
+// Map game ticker → Yahoo Finance symbol convention.
+function yahooSymbol(ticker) {
+    if (ticker === 'BTC/USD') return 'BTC-USD';
+    if (ticker === 'ETH/USD') return 'ETH-USD';
+    if (ticker === 'SOL/USD') return 'SOL-USD';
+    return ticker;  // SPY, AAPL, NVDA, etc.
+}
+
+function isCryptoTicker(ticker) {
+    return /[\/-]USD$/i.test(ticker) || ticker === 'BTC' || ticker === 'ETH';
+}
+
+// CORS proxy chain — Yahoo's chart API blocks browser CORS, so we route through these.
+// allorigins.win is primary; corsproxy.io was free-tier 403'd around 2026-04 but kept as fallback.
+const _PROXY_CHAIN = [
+    u => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    u => `https://corsproxy.io/?url=${encodeURIComponent(u)}`,
+];
+
+async function _fetchProxiedJson(url) {
+    for (const wrap of _PROXY_CHAIN) {
+        try {
+            const r = await fetch(wrap(url), { cache: 'no-store' });
+            if (!r.ok) continue;
+            const text = await r.text();
+            if (!text) continue;
+            try { return JSON.parse(text); } catch { continue; }
+        } catch { /* try next proxy */ }
+    }
+    return null;
+}
+
+// Fetch 1-min bars from Yahoo for a window. startSec/endSec are unix seconds.
+async function fetchYahooBars(ticker, startSec, endSec) {
+    const sym = yahooSymbol(ticker);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?period1=${startSec}&period2=${endSec}&interval=1m`;
+    const j = await _fetchProxiedJson(url);
+    const result = j?.chart?.result?.[0];
+    if (!result) return [];
+    const ts = result.timestamp || [];
+    const q  = result.indicators?.quote?.[0];
+    if (!q || !ts.length) return [];
+    const bars = [];
+    for (let i = 0; i < ts.length; i++) {
+        if (q.close[i] == null) continue;
+        bars.push({
+            t: new Date(ts[i] * 1000).toISOString(),
+            o: q.open[i]  ?? q.close[i],
+            h: q.high[i]  ?? q.close[i],
+            l: q.low[i]   ?? q.close[i],
+            c: q.close[i],
+            v: q.volume[i] || 0,
+        });
+    }
+    return bars;
+}
+
+// Latest price = most recent close from a 1-day fetch. Used to seed the chart.
+async function fetchYahooLatestPrice(ticker) {
+    const sym = yahooSymbol(ticker);
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?range=1d&interval=1m`;
+    const j = await _fetchProxiedJson(url);
+    const result = j?.chart?.result?.[0];
+    return result?.meta?.regularMarketPrice || null;
+}
+
+// ---- Compatibility stubs (existing call-sites still reference these) ----
+let DATA_SOURCE = 'sim';  // legacy flag — kept so executeTrade/drawBackground/updateMarket branches still work
+function renderSeatHUD()       { const el = document.getElementById('seat-scoreboard'); if (el) el.innerHTML = ''; }
+function renderSeatSettings()  { const el = document.getElementById('seat-settings');   if (el) el.innerHTML = ''; }
+async function fetchIBPortfolio()       { /* virtual paper — no live sync */ }
+async function fetchAlpacaPortfolio()   { /* virtual paper — no live sync */ }
+async function flattenAlpacaPositions() { /* virtual paper — no real positions */ }
+function connectAlpaca()  { /* no-op */ }
+function initDataSource() { setIndicator('VIRTUAL', '#888', typeof activeTicker !== 'undefined' ? activeTicker : 'SPY'); }
+
+initDataSource();
+renderSeatHUD();
+
+// ---- SPY Historical Level System ----
+
+function getRecentTradingDays(count) {
+    const days = [];
+    const d = new Date();
+    while (days.length < count) {
+        const iso = d.toISOString().slice(0, 10);
+        const dow = d.getUTCDay();
+        if (dow !== 0 && dow !== 6) days.push(iso);
+        d.setUTCDate(d.getUTCDate() - 1);
+    }
+    return days;
+}
+
+// Fetch a window of 1-min bars for a date+window from Yahoo. Cached in localStorage.
+async function fetchBars(symbol, dateStr, win) {
+    const cacheKey = `nyan_bars_${symbol.replace('/', '_')}_${dateStr}_${win}`;
+    const cached = localStorage.getItem(cacheKey);
+    if (cached) { try { return JSON.parse(cached); } catch {} }
+
+    // Compute UTC start/end for the requested window. ET → UTC: Mar–Nov = +4 (EDT), else +5 (EST).
+    const month = parseInt(dateStr.slice(5, 7), 10);
+    const etToUtc = (month >= 3 && month <= 11) ? 4 : 5;
+    const [y, m, d] = dateStr.split('-').map(Number);
+    const startEtH = (win === 'close') ? 15 : 9;
+    const startEtM = (win === 'close') ? 0  : 30;
+    const endEtH   = (win === 'open')  ? 10 : 16;
+    const endEtM   = (win === 'open')  ? 30 : 0;
+    const startSec = Math.floor(Date.UTC(y, m - 1, d, startEtH + etToUtc, startEtM) / 1000);
+    const endSec   = Math.floor(Date.UTC(y, m - 1, d, endEtH   + etToUtc, endEtM)   / 1000);
+
+    const bars = await fetchYahooBars(symbol, startSec, endSec);
+    if (bars.length > 0) localStorage.setItem(cacheKey, JSON.stringify(bars));
+    return bars;
+}
+
+async function fetchLatestPrice(symbol /*, isCrypto */) {
+    return await fetchYahooLatestPrice(symbol);
+}
+
+function isWindowAvailable(dateStr, win) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (dateStr < today) return true;
+    if (dateStr > today) return false;
+    // Same day — check if the window has ended yet
+    const now = new Date();
+    const month = parseInt(dateStr.slice(5, 7), 10);
+    const etOffsetHours = (month >= 3 && month <= 11) ? 4 : 5; // hours to add to ET to get UTC
+    const endHourET = (win === 'open') ? 10.5 : 16.0;
+    const endHourUTC = endHourET + etOffsetHours;
+    const nowHourUTC = now.getUTCHours() + now.getUTCMinutes() / 60;
+    return nowHourUTC >= endHourUTC;
+}
+
+function showLevelSelect() {
+    document.getElementById('levelSelect').classList.remove('hidden');
+    populateLevelSelect();
+}
+
+function hideLevelSelect() {
+    document.getElementById('levelSelect').classList.add('hidden');
+}
+
+function isSpyMarketOpen() {
+    const now = new Date();
+    const dow = now.getUTCDay(); // 0=Sun, 6=Sat
+    if (dow === 0 || dow === 6) return false;
+    const month = now.getUTCMonth() + 1;
+    const etOffsetHours = (month >= 3 && month <= 11) ? 4 : 5;
+    const etHour = now.getUTCHours() - etOffsetHours + now.getUTCMinutes() / 60;
+    return etHour >= 9.5 && etHour < 16.0;
+}
+
+function populateLevelSelect() {
+    // SPY Live is now last-hour-replay (not real-time IEX), so available 24/7.
+    const spyBtn = document.getElementById('quickPlaySPYBtn');
+    if (spyBtn) {
+        spyBtn.disabled = false;
+        spyBtn.textContent = '▶ SPY Last Hour';
+        spyBtn.title = 'Replay the most recent hour at 60×';
+    }
+
+    // Sync ticker tab active states
+    const isCustom = activeTicker !== 'SPY' && activeTicker !== 'BTC/USD';
+    document.querySelectorAll('.ticker-tab').forEach(tab => {
+        const isActive = tab.dataset.ticker === activeTicker ||
+                         (tab.dataset.ticker === 'custom' && isCustom);
+        tab.classList.toggle('active', isActive);
+    });
+    const customInput = document.getElementById('customTickerInput');
+    customInput.classList.toggle('hidden', !isCustom);
+    if (isCustom) customInput.value = activeTicker;
+
+    document.getElementById('historicalSectionLabel').textContent = `${activeTicker} Historical Levels`;
+    renderLevelGrid();
+}
+
+function renderLevelGrid() {
+    const grid = document.getElementById('spyLevelGrid');
+    const days = getRecentTradingDays(10);
+    grid.innerHTML = days.map(day => {
+        const label = new Date(day + 'T12:00:00Z')
+            .toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
+
+        const openAvail  = isWindowAvailable(day, 'open');
+        const closeAvail = isWindowAvailable(day, 'close');
+        const fullAvail  = isWindowAvailable(day, 'full');
+
+        const openDis  = !openAvail  ? 'disabled title="Data not yet available"' : '';
+        const closeDis = !closeAvail ? 'disabled title="Data not yet available"' : '';
+        const fullDis  = !fullAvail  ? 'disabled title="Data not yet available"' : '';
+
+        const openCls  = `level-btn${!openAvail  ? ' future-lock' : ''}`;
+        const closeCls = `level-btn${!closeAvail ? ' future-lock' : ''}`;
+        const fullCls  = `level-btn level-btn-full${!fullAvail ? ' future-lock' : ''}`;
+
+        return `<div class="level-row">
+            <span class="level-date">${label}</span>
+            <button class="${openCls}"  ${openDis}  onclick="loadLevel('${day}','open',this)">Open 9:30</button>
+            <button class="${closeCls}" ${closeDis} onclick="loadLevel('${day}','close',this)">Close 3PM</button>
+            <button class="${fullCls}"  ${fullDis}  onclick="loadLevel('${day}','full',this)">Full Day</button>
+        </div>`;
+    }).join('');
+}
+
+async function loadLevel(dateStr, win, btn) {
+    const statusEl = document.getElementById('levelSelectStatus');
+    statusEl.textContent = `Fetching ${activeTicker} bars…`;
+    const origText = btn ? btn.textContent : '';
+    if (btn) { btn.disabled = true; btn.textContent = '⏳'; }
+    try {
+        const bars = await fetchBars(activeTicker, dateStr, win);
+        if (bars.length < 2) throw new Error('No trading data for this date/window');
+
+        // Determine if this is a near-live replay (< 60 min since window closed → lock to 1x)
+        const lvlMonth = parseInt(dateStr.slice(5, 7), 10);
+        const etOffsetHours = (lvlMonth >= 3 && lvlMonth <= 11) ? 4 : 5;
+        const endHourET = (win === 'open') ? 10.5 : 16.0;
+        const endHourUTC = endHourET + etOffsetHours;
+        const [lvlY, lvlM, lvlD] = dateStr.split('-').map(Number);
+        const windowEndUTC = Date.UTC(lvlY, lvlM - 1, lvlD, Math.floor(endHourUTC), Math.round((endHourUTC % 1) * 60));
+        spyIsLive = (Date.now() - windowEndUTC) < 60 * 60 * 1000;
+
+        spyBars = bars;
+        spyBarIdx = 0;
+        spyFrameCounter = 0;
+        spyMode = true;
+        spyFramesPerBar = Math.max(1, Math.round(3600 / spySpeed));
+        LEVEL_DURATION = bars.length * spyFramesPerBar;
+
+        const winLabel = win === 'open' ? '9:30–10:30 Open'
+                       : win === 'close' ? '3–4PM Close' : 'Full Day';
+        const dateLabel = new Date(dateStr + 'T12:00:00Z')
+            .toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+        spyLevelLabel = `${dateLabel} ${winLabel}`;
+
+        statusEl.textContent = '';
+        hideLevelSelect();
+        resetGame();
+    } catch (e) {
+        statusEl.textContent = `Error: ${e.message}`;
+        if (btn) { btn.disabled = false; btn.textContent = origText; }
+    }
+}
+
+async function startQuickPlay(ticker, isCrypto) {
+    activeTicker = ticker || 'SPY';
+    activeTickerIsCrypto = isCrypto != null ? !!isCrypto : isCryptoTicker(activeTicker);
+    localStorage.setItem('nyan_active_ticker', activeTicker);
+
+    const statusEl = document.getElementById('levelSelectStatus');
+    if (statusEl) statusEl.textContent = `Fetching ${activeTicker} last hour…`;
+
+    // Last-hour replay at 60× — fetch the most recent ~65 min of 1-min bars from Yahoo.
+    const endSec   = Math.floor(Date.now() / 1000);
+    const startSec = endSec - 65 * 60;
+    const bars = await fetchYahooBars(activeTicker, startSec, endSec);
+    if (!bars || bars.length < 2) {
+        if (statusEl) statusEl.textContent = `No recent data for ${activeTicker} (market closed?)`;
+        return;
+    }
+
+    spyBars = bars;
+    spyBarIdx = 0;
+    spyFrameCounter = 0;
+    spyMode = true;
+    spyFramesPerBar = Math.max(1, Math.round(3600 / spySpeed));
+    LEVEL_DURATION = bars.length * spyFramesPerBar;
+    spyLevelLabel = `${activeTicker} Last Hour`;
+    spyIsLive = false;
+
+    if (statusEl) statusEl.textContent = '';
+    hideLevelSelect();
+    resetGame(bars[0].o ?? bars[0].c);
+}
+
+// BTC Chart Data
+const priceHistory = [];
+let currentBTCPrice = 65000.00;
+let smoothedPriceY = 0;
+const chartCapacity = 150;
+const trades = [];
+
+// SPY Level State
+let spyMode = false;
+let spyBars = [];
+let spyBarIdx = 0;
+let spyFrameCounter = 0;
+let spyFramesPerBar = 60;  // at 60x default: 3600/60 = 60 frames per 1-min bar
+let spySpeed = 60;         // 60x = current realtime feel; 1x = full 60-min session in 60 mins
+let spyLevelLabel = '';
+let spyIsLive = false; // true when level data ended < 60 min ago → no speedup
+
+// Trading State
+let openPosition = 0;
+let entryPrice = 0;
+const HEART_LOSS_STEP = 1000.00;
+
+// MACD Data
+const ema12 = [];
+const ema26 = [];
+const macdLine = [];
+const signalLine = [];
+const histogram = [];
+
+// Leaderboard
+let leaderboard = JSON.parse(localStorage.getItem('nyan_leaderboard') || '[]');
+let allSessions = JSON.parse(localStorage.getItem('nyan_all_sessions') || '[]');
+// One-time migration from old leaderboard
+if (allSessions.length === 0 && leaderboard.length > 0) {
+    allSessions = leaderboard.map(e => ({ ...e, isoDate: e.isoDate || null }));
+    localStorage.setItem('nyan_all_sessions', JSON.stringify(allSessions));
+}
+
+// Controls
+const keys = {};
+
+function tryStartMusic() {
+    if (!musicStarted && !isGameOver && !isPaused) {
+        bgMusic.play().catch(e => console.log("Audio play failed", e));
+        musicStarted = true;
+    }
+}
+
+window.addEventListener('keydown', e => {
+    if (e.code === 'Escape') {
+        isPaused = !isPaused;
+        if (isPaused) bgMusic.pause();
+        else if (musicStarted) bgMusic.play();
+        return;
+    }
+
+    const inInput = e.target.tagName === 'INPUT' || e.target.tagName === 'SELECT' || e.target.tagName === 'TEXTAREA';
+
+    keys[e.code] = true;
+    if (!inInput) tryStartMusic();
+
+    if (!isGameOver && !isPaused && !inInput) {
+        if (e.code === 'ArrowUp' || e.code === 'KeyW') executeTrade('BUY');
+        if ((e.code === 'ArrowDown' || e.code === 'KeyS') && !moveOnlyDown) executeTrade('SELL');
+        if (e.code === 'Space') { if (openPosition > 0) executeTrade('SELL_ALL'); }
+
+        // Number keys: quick-buy at preset allocations (BUY = key, SELL = Shift+key)
+        const hotkeys = { Digit1: 10, Digit2: 25, Digit3: 50, Digit4: 75, Digit5: 100 };
+        if (hotkeys[e.code] !== undefined) {
+            e.preventDefault();
+            executeTrade(e.shiftKey ? 'SELL' : 'BUY', hotkeys[e.code]);
+        }
+    }
+});
+window.addEventListener('keyup', e => keys[e.code] = false);
+
+// Touch on canvas: right half = BUY, left half = SELL
+canvas.addEventListener('touchstart', e => {
+    e.preventDefault();
+    tryStartMusic();
+    if (!isGameOver && !isPaused) {
+        const touch = e.touches[0];
+        const rect = canvas.getBoundingClientRect();
+        const x = touch.clientX - rect.left;
+        if (x >= rect.width / 2) {
+            executeTrade('BUY');
+        } else {
+            executeTrade('SELL');
+        }
+    }
+}, { passive: false });
+
+// Mobile control buttons
+document.getElementById('mobileBuyBtn').addEventListener('pointerdown', e => {
+    e.preventDefault();
+    tryStartMusic();
+    if (!isGameOver && !isPaused) executeTrade('BUY');
+});
+
+document.getElementById('mobileSellBtn').addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (!isGameOver && !isPaused) executeTrade('SELL');
+});
+
+document.getElementById('mobileSellAllBtn').addEventListener('pointerdown', e => {
+    e.preventDefault();
+    if (!isGameOver && !isPaused && openPosition > 0) executeTrade('SELL_ALL');
+});
+
+let lastLiveOrderTime = 0;
+const LIVE_ORDER_COOLDOWN_MS = 1500;  // min ms between real orders
+
+function sendLiveOrder(_action, _cashQty, _qty) {
+    // Virtual paper trading — no real broker call. Stub kept so executeTrade compiles.
+}
+
+// pct: percentage of portfolio (0-100). Default uses TRADE_ALLOCATION setting.
+function executeTrade(type, pct) {
+    const alloc = pct != null ? pct : TRADE_ALLOCATION;
+    let tradePrice = currentBTCPrice;
+    let timeStr = new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    const tradeValueDollars = portfolioAmount * (alloc / 100);
+    const unitsToTrade = tradeValueDollars / tradePrice;
+
+    if (type === 'BUY') {
+        // Virtual paper: buying power = free cash (portfolio value minus open position value)
+        const positionValue = openPosition * tradePrice;
+        const freeCash = Math.max(0, portfolioAmount - positionValue);
+        if (freeCash < 1) {
+            addTapeNotice('No buying power — close position first');
+            return;
+        }
+        const effectiveNotional = Math.min(tradeValueDollars, freeCash);
+        const effectiveUnits = effectiveNotional / tradePrice;
+        openPosition += effectiveUnits;
+        entryPrice = tradePrice;
+        addTradeMarker('BUY', tradePrice);
+        addToTape(timeStr, tradePrice, 'BUY', effectiveNotional, null);
+        sendLiveOrder('BUY', effectiveNotional, null);
+    } else if (type === 'SELL') {
+        let pnl = null;
+        if (openPosition > 0) {
+            const unitsSold = Math.min(unitsToTrade, openPosition);
+            pnl = (tradePrice - entryPrice) * unitsSold;
+            openPosition = Math.max(0, openPosition - unitsToTrade);
+            sendLiveOrder('SELL', unitsSold * tradePrice, unitsSold);
+        }
+        addTradeMarker('SELL', tradePrice);
+        addToTape(timeStr, tradePrice, 'SELL', tradeValueDollars, pnl);
+    } else if (type === 'SELL_ALL') {
+        const pnl = openPosition > 0 ? (tradePrice - entryPrice) * openPosition : null;
+        const exitValue = openPosition * tradePrice;
+        if (openPosition > 0) sendLiveOrder('SELL', exitValue, openPosition);
+        addTradeMarker('SELL', tradePrice);
+        addToTape(timeStr, tradePrice, 'EXIT', exitValue, pnl);
+        openPosition = 0;
+    }
+}
+
+function addTradeMarker(type, price) {
+    trades.push({
+        type: type,
+        price: price,
+        frame: frames,
+        x: (priceHistory.length / chartCapacity) * canvas.width
+    });
+}
+
+function addTapeNotice(msg) {
+    const li = document.createElement('li');
+    li.className = 'tape-exit';
+    li.style.color = '#aaa';
+    li.style.fontSize = '10px';
+    li.textContent = msg;
+    tapeList.insertBefore(li, tapeList.firstChild);
+}
+
+function addToTape(time, price, side, qty, pnl) {
+    const li = document.createElement('li');
+    const cssClass = side === 'BUY' ? 'tape-buy' : side === 'EXIT' ? 'tape-exit' : 'tape-sell';
+    li.className = cssClass;
+
+    const qtyStr = qty != null ? `$${Math.round(qty).toLocaleString()}` : '';
+    const priceStr = `$${price.toFixed(0)}`;
+    let pnlStr = '';
+    let pnlClass = '';
+    if (pnl != null) {
+        const sign = pnl >= 0 ? '+' : '';
+        pnlStr = `${sign}$${Math.abs(pnl).toFixed(0)}`;
+        pnlClass = pnl >= 0 ? 'tape-pnl-profit' : 'tape-pnl-loss';
+    }
+
+    li.innerHTML = `
+        <span class="col-time">${time}</span>
+        <span class="col-side">${side}</span>
+        <span class="col-qty">${qtyStr}</span>
+        <span class="col-price">${priceStr}</span>
+        <span class="col-pnl ${pnlClass}">${pnlStr}</span>
+    `;
+    tapeList.insertBefore(li, tapeList.firstChild);
+    if (tapeList.children.length > 50) tapeList.removeChild(tapeList.lastChild);
+}
+
+function calculateEMA(data, period, prevEMA) {
+    const k = 2 / (period + 1);
+    return data * k + prevEMA * (1 - k);
+}
+
+function updateMarket() {
+    const prevPrice = currentBTCPrice;
+
+    if (spyMode && spyBars.length > 0) {
+        spyFrameCounter++;
+        if (spyFrameCounter >= spyFramesPerBar) {
+            spyFrameCounter = 0;
+            if (spyBarIdx < spyBars.length - 1) spyBarIdx++;
+        }
+        const bar = spyBars[spyBarIdx];
+        const t = spyFramesPerBar > 0 ? spyFrameCounter / spyFramesPerBar : 0;
+        currentBTCPrice = bar.o + (bar.c - bar.o) * t;
+    } else if (DATA_SOURCE !== 'sim' && livePrice !== null) {
+        currentBTCPrice = livePrice;
+    } else {
+        currentBTCPrice += (Math.random() - 0.48) * currentBTCPrice * 0.00013;
+    }
+
+    // Sim + SPY backtesting: interpolate P&L from price movement each frame.
+    // Live mode only: portfolio_value from the API poll is the source of truth.
+    if ((DATA_SOURCE === 'sim' || spyMode) && openPosition !== 0) {
+        const pnl = (currentBTCPrice - prevPrice) * openPosition;
+        portfolioAmount += pnl;
+    }
+
+    const totalDrawdown = START_PORTFOLIO - portfolioAmount;
+    const currentMaxAllowedDrawdown = (3 - livesCount + 1) * HEART_LOSS_STEP;
+
+    if (totalDrawdown >= currentMaxAllowedDrawdown) {
+        takeDamage("Drawdown Threshold Hit!");
+    }
+
+    if (frames % 5 === 0) {
+        const lastPrice = currentBTCPrice;
+        priceHistory.push({
+            price: lastPrice,
+            time: new Date().toLocaleTimeString([], { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' })
+        });
+        if (priceHistory.length > chartCapacity) priceHistory.shift();
+
+        const lastEMA12 = ema12.length > 0 ? ema12[ema12.length - 1] : lastPrice;
+        const lastEMA26 = ema26.length > 0 ? ema26[ema26.length - 1] : lastPrice;
+        const newEMA12 = calculateEMA(lastPrice, 12, lastEMA12);
+        const newEMA26 = calculateEMA(lastPrice, 26, lastEMA26);
+        ema12.push(newEMA12); ema26.push(newEMA26);
+        const currentMACD = newEMA12 - newEMA26;
+        macdLine.push(currentMACD);
+        const lastSignal = signalLine.length > 0 ? signalLine[signalLine.length - 1] : currentMACD;
+        const currentSignal = calculateEMA(currentMACD, 9, lastSignal);
+        signalLine.push(currentSignal);
+        histogram.push(currentMACD - currentSignal);
+        if (ema12.length > chartCapacity) {
+            ema12.shift(); ema26.shift(); macdLine.shift(); signalLine.shift(); histogram.shift();
+        }
+    }
+}
+
+function updateHUD() {
+    portfolioElement.innerText = `$${portfolioAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    const diff = portfolioAmount - START_PORTFOLIO;
+    const percent = (diff / START_PORTFOLIO) * 100;
+    pnlDollarElement.innerText = `${diff >= 0 ? '+' : ''}$${diff.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+    pnlPercentElement.innerText = `${diff >= 0 ? '+' : ''}${percent.toFixed(2)}%`;
+    pnlDollarElement.className = diff >= 0 ? 'profit' : 'loss';
+    pnlPercentElement.className = diff >= 0 ? 'profit' : 'loss';
+    livesElement.innerText = '❤️'.repeat(Math.max(0, livesCount));
+    let secondsLeft;
+    let progressPercent;
+    if (spyMode && spyBars.length > 0) {
+        // Show actual bar clock time in ET
+        const barMs = new Date(spyBars[spyBarIdx].t).getTime();
+        const month = new Date(barMs).getUTCMonth() + 1;
+        const etOffsetMs = (month >= 3 && month <= 11) ? 4 * 3600000 : 5 * 3600000;
+        const etDate = new Date(barMs - etOffsetMs);
+        const bh = etDate.getUTCHours();
+        const bm = etDate.getUTCMinutes();
+        const period = bh >= 12 ? 'PM' : 'AM';
+        const bh12 = bh > 12 ? bh - 12 : (bh === 0 ? 12 : bh);
+        timerElement.innerText = `${bh12}:${bm.toString().padStart(2, '0')} ${period}`;
+        progressPercent = Math.min(100, (spyBarIdx / Math.max(1, spyBars.length - 1)) * 100);
+    } else {
+        secondsLeft = Math.max(0, Math.ceil((LEVEL_DURATION - frames) / 60));
+        progressPercent = Math.min(100, (frames / LEVEL_DURATION) * 100);
+        let m = Math.floor(secondsLeft / 60).toString().padStart(2, '0');
+        let s = (secondsLeft % 60).toString().padStart(2, '0');
+        timerElement.innerText = `${m}:${s}`;
+    }
+    progressBar.style.width = `${progressPercent}%`;
+    progressThumb.style.left = `${progressPercent}%`;
+}
+
+// Entities
+const cat = {
+    x: 100,
+    y: 0, // set after resizeCanvas
+    width: 110,
+    height: 60,
+    speed: 6,
+    isHit: false,
+    hitTimer: 0,
+    trail: [],
+    animFrame: 0,
+    priceOffsetY: 0, // manual vertical nudge relative to price line
+
+    draw() {
+        if (this.trail.length > 1) {
+            ctx.strokeStyle = 'rgba(0, 255, 255, 0.4)';
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            this.trail.forEach((p, i) => {
+                const drawX = p.x - (frames - p.frame) * 0.5;
+                if (drawX < -100) return;
+                if (i === 0) ctx.moveTo(drawX, p.y);
+                else ctx.lineTo(drawX, p.y);
+            });
+            ctx.stroke();
+        }
+
+        if (this.isHit && Math.floor(Date.now() / 100) % 2 === 0) return;
+
+        const colors = ['#ff0000', '#ff9900', '#ffff00', '#33ff00', '#0099ff', '#6633ff'];
+        const segmentWidth = 10;
+        const trailLength = 15;
+        for (let i = 0; i < trailLength; i++) {
+            const waveY = Math.sin((frames - i * 5) * 0.2) * 8;
+            for (let j = 0; j < 6; j++) {
+                ctx.fillStyle = colors[j];
+                ctx.fillRect(this.x + 25 - (i * segmentWidth) - segmentWidth, this.y + 12 + (j * 6) + waveY, segmentWidth + 2, 6);
+            }
+        }
+
+        this.animFrame = Math.floor(frames / 8) % frameCount;
+        const currentFrame = nyanFrames[this.animFrame];
+        if (currentFrame.complete) {
+            ctx.drawImage(currentFrame, this.x, this.y, this.width, this.height);
+        }
+    },
+
+    update() {
+        if (this.isHit) {
+            this.hitTimer--;
+            if (this.hitTimer <= 0) this.isHit = false;
+        }
+
+        this.priceOffsetY = 0;
+        if (keys['ArrowUp'] || keys['KeyW']) this.y -= this.speed;
+        if (keys['ArrowDown'] || keys['KeyS']) this.y += this.speed;
+        if (keys['ArrowLeft'] || keys['KeyA']) this.x -= this.speed;
+        if (keys['ArrowRight'] || keys['KeyD']) this.x += this.speed;
+
+        this.x = Math.max(0, Math.min(canvas.width - this.width, this.x));
+        this.y = Math.max(0, Math.min(canvas.height - this.height, this.y));
+
+        this.trail.push({ x: this.x + 40, y: this.y + 30, frame: frames });
+        if (this.trail.length > 1000) this.trail.shift();
+    }
+};
+
+function drawOpponentCat(state) {
+    if (!state || state.catY == null) return;
+    const ox = cat.x + 18;
+    const oy = state.catY;
+    const color = state.color || '#ffaa00';
+    const alive = state.alive !== false;
+
+    ctx.save();
+    ctx.globalAlpha = alive ? 0.78 : 0.28;
+
+    // Rainbow trail (offset from player's)
+    const rc = ['#ff0000','#ff9900','#ffff00','#33ff00','#0099ff','#6633ff'];
+    for (let i = 0; i < 15; i++) {
+        const wy = Math.sin((frames - i * 5) * 0.2) * 8;
+        for (let j = 0; j < 6; j++) {
+            ctx.fillStyle = rc[j];
+            ctx.fillRect(ox + 25 - i * 10 - 10, oy + 12 + j * 6 + wy, 12, 6);
+        }
+    }
+
+    // Cat sprite
+    const af = Math.floor(frames / 8) % frameCount;
+    if (nyanFrames[af]?.complete) ctx.drawImage(nyanFrames[af], ox, oy, cat.width, cat.height);
+
+    // Colored outline so it's visually distinct from the local cat
+    ctx.globalAlpha = alive ? 0.9 : 0.4;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.strokeRect(ox - 3, oy - 3, cat.width + 6, cat.height + 6);
+
+    // Name tag
+    ctx.font = 'bold 11px Arial';
+    const tw = ctx.measureText(state.name || 'Opponent').width;
+    ctx.fillStyle = 'rgba(0,0,0,0.82)';
+    ctx.fillRect(ox, oy - 23, tw + 12, 19);
+    ctx.fillStyle = color;
+    ctx.fillText(state.name || 'Opponent', ox + 6, oy - 8);
+
+    // P&L badge
+    if (state.pct != null) {
+        const ps = (state.pct >= 0 ? '+' : '') + state.pct.toFixed(1) + '%';
+        ctx.font = 'bold 10px Arial';
+        ctx.fillStyle = state.pct >= 0 ? '#00ff88' : '#ff4444';
+        ctx.fillText(ps, ox + cat.width + 5, oy + 20);
+    }
+
+    ctx.restore();
+}
+
+function drawBackground() {
+    const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+    grad.addColorStop(0, '#000000');
+    grad.addColorStop(1, '#000022');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (priceHistory.length < 2) return;
+
+    const chartAreaHeight = canvas.height * 0.7;
+    const chartYOffset = (canvas.height - chartAreaHeight) / 2;
+    const macdChartHeight = canvas.height * 0.15;
+    const rawMin = Math.min(...priceHistory.map(d => d.price));
+    const rawMax = Math.max(...priceHistory.map(d => d.price));
+    const mid = (rawMin + rawMax) / 2;
+    const minRange = DATA_SOURCE !== 'sim' ? mid * 0.002 : 0; // 0.2% min range for live data
+    const halfRange = Math.max(rawMax - rawMin, minRange) / 2 * 1.05;
+    const minPrice = mid - halfRange;
+    const maxPrice = mid + halfRange;
+    const priceRange = maxPrice - minPrice;
+
+    function getPriceY(price) {
+        return chartYOffset + chartAreaHeight - ((price - minPrice) / priceRange) * chartAreaHeight;
+    }
+
+    const targetPriceY = getPriceY(currentBTCPrice);
+    if (smoothedPriceY === 0) smoothedPriceY = targetPriceY;
+    else smoothedPriceY += (targetPriceY - smoothedPriceY) * 0.1;
+
+    // Chart anchor: newest bar always sits at 75% of screen width, leaving 25% ahead as negative space
+    const anchorX = canvas.width * 0.75;
+    const stepX = anchorX / Math.max(chartCapacity - 1, 1);
+    // chartX(i): maps history index to canvas x, anchored so index (length-1) = anchorX
+    const chartX = i => anchorX + (i - (priceHistory.length - 1)) * stepX;
+
+    // Main Chart
+    ctx.strokeStyle = '#00ff00';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    priceHistory.forEach((data, i) => {
+        const x = chartX(i);
+        const y = getPriceY(data.price);
+        const prevX = i > 0 ? chartX(i - 1) : x;
+        if (i === 0 || prevX < 0) ctx.moveTo(Math.max(0, x), y);
+        else ctx.lineTo(x, y);
+        if (x >= 0 && i % 40 === 0) {
+            ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.font = '10px Arial';
+            ctx.fillText(data.time, x, chartYOffset + chartAreaHeight + 12);
+        }
+    });
+    ctx.stroke();
+
+    // Optimal signals — hollow glowing triangles at local peaks/troughs
+    const win = 8;
+    for (let i = win; i < priceHistory.length - win; i++) {
+        const price = priceHistory[i].price;
+        let isMin = true, isMax = true;
+        for (let j = i - win; j <= i + win; j++) {
+            if (j === i) continue;
+            if (priceHistory[j].price < price) isMax = false;
+            if (priceHistory[j].price > price) isMin = false;
+        }
+        if (!isMin && !isMax) continue;
+        // Suppress low-prominence signals (reduces noise on live data)
+        const windowPrices = priceHistory.slice(i - win, i + win + 1).map(d => d.price);
+        const winMin = Math.min(...windowPrices);
+        const winMax = Math.max(...windowPrices);
+        const prominence = isMax ? (price - winMin) : (winMax - price);
+        if (prominence < currentBTCPrice * 0.0003) continue;
+        const ox = chartX(i);
+        if (ox < 0 || ox > canvas.width) continue;
+        const oy = getPriceY(price);
+        ctx.save();
+        ctx.lineWidth = 1.5;
+        if (isMin) {
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#00ff88';
+            ctx.strokeStyle = '#00ff88';
+            ctx.beginPath();
+            ctx.moveTo(ox, oy + 7);
+            ctx.lineTo(ox - 7, oy + 20);
+            ctx.lineTo(ox + 7, oy + 20);
+            ctx.closePath();
+            ctx.stroke();
+        } else {
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#ff4444';
+            ctx.strokeStyle = '#ff4444';
+            ctx.beginPath();
+            ctx.moveTo(ox, oy - 7);
+            ctx.lineTo(ox - 7, oy - 20);
+            ctx.lineTo(ox + 7, oy - 20);
+            ctx.closePath();
+            ctx.stroke();
+        }
+        ctx.restore();
+    }
+
+    // Player trade markers — solid filled + glow (drawn on top of optimal signals)
+    trades.forEach(t => {
+        const pointsBack = (frames - t.frame) / 5;
+        const x = anchorX - pointsBack * stepX;
+        const y = getPriceY(t.price);
+
+        if (x < 0) return;
+
+        ctx.save();
+        if (t.type === 'BUY') {
+            ctx.shadowBlur = 18;
+            ctx.shadowColor = '#00ff00';
+            ctx.fillStyle = '#00ff00';
+            ctx.beginPath();
+            ctx.moveTo(x, y + 10);
+            ctx.lineTo(x - 9, y + 26);
+            ctx.lineTo(x + 9, y + 26);
+            ctx.closePath();
+            ctx.fill();
+        } else {
+            ctx.shadowBlur = 18;
+            ctx.shadowColor = '#ff2222';
+            ctx.fillStyle = '#ff2222';
+            ctx.beginPath();
+            ctx.moveTo(x, y - 10);
+            ctx.lineTo(x - 9, y - 26);
+            ctx.lineTo(x + 9, y - 26);
+            ctx.closePath();
+            ctx.fill();
+        }
+        ctx.restore();
+    });
+
+    // BTC Icon & Price — always at the chart anchor (75% of screen)
+    const priceX = Math.min(anchorX, canvas.width - 165);
+    const blink = Math.floor(frames / 30) % 2 === 0;
+
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(priceX + 25, smoothedPriceY - 20, 140, 40);
+    ctx.strokeStyle = blink ? '#00ff00' : '#004400';
+    ctx.strokeRect(priceX + 25, smoothedPriceY - 20, 140, 40);
+    ctx.fillStyle = blink ? (spyMode ? '#00cfff' : '#00ff00') : (spyMode ? '#0088aa' : '#00aa00');
+    ctx.font = 'bold 16px Arial';
+    if (spyMode) {
+        ctx.fillText(`${activeTicker} $${currentBTCPrice.toFixed(2)}`, priceX + 5, smoothedPriceY + 6);
+    } else if (activeTicker === 'BTC/USD') {
+        ctx.fillText(`$${currentBTCPrice.toFixed(2)}`, priceX + 30, smoothedPriceY + 6);
+        if (btcIcon.complete) {
+            ctx.drawImage(btcIcon, priceX - 20, smoothedPriceY - 20, 40, 40);
+        }
+    } else {
+        ctx.fillText(`${activeTicker} $${currentBTCPrice.toFixed(2)}`, priceX + 5, smoothedPriceY + 6);
+    }
+
+    // MACD — aligned to same anchor so bars line up with chart
+    const macdYBase = canvas.height - 30;
+    const maxHist = Math.max(...histogram.map(Math.abs), 0.1);
+    histogram.forEach((val, i) => {
+        const x = anchorX + (i - (histogram.length - 1)) * stepX;
+        if (x < 0) return;
+        const h = (val / maxHist) * (macdChartHeight / 2);
+        ctx.fillStyle = val >= 0 ? 'rgba(0, 255, 0, 0.5)' : 'rgba(255, 0, 0, 0.5)';
+        ctx.fillRect(x, macdYBase - h, stepX - 1, h);
+    });
+}
+
+function takeDamage(msg) {
+    if (cat.isHit) return;
+    livesCount--;
+    portfolioAmount = START_PORTFOLIO - (3 - livesCount) * HEART_LOSS_STEP;
+    cat.isHit = true;
+    cat.hitTimer = 60;
+    if (livesCount <= 0) endGame("Portfolio Liquidated!");
+}
+
+function playFanfare() {
+    try {
+        const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        [[523.25, 0], [659.25, 0.15], [783.99, 0.30], [1046.50, 0.50]].forEach(([freq, t]) => {
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.type = 'sine';
+            osc.frequency.value = freq;
+            gain.gain.setValueAtTime(0, audioCtx.currentTime + t);
+            gain.gain.linearRampToValueAtTime(0.22, audioCtx.currentTime + t + 0.04);
+            gain.gain.linearRampToValueAtTime(0, audioCtx.currentTime + t + 0.55);
+            osc.start(audioCtx.currentTime + t);
+            osc.stop(audioCtx.currentTime + t + 0.6);
+        });
+    } catch(e) {}
+}
+
+function startConfetti() {
+    const cc = document.getElementById('confettiCanvas');
+    cc.width = window.innerWidth;
+    cc.height = window.innerHeight;
+    cc.style.display = 'block';
+    const cctx = cc.getContext('2d');
+    const COLORS = ['#ff99cc', '#00ff88', '#ffff00', '#00cfff', '#ff6600', '#cc44ff'];
+    const particles = Array.from({ length: 160 }, () => ({
+        x: Math.random() * cc.width,
+        y: Math.random() * -cc.height * 0.5,
+        w: Math.random() * 10 + 4,
+        h: Math.random() * 5 + 3,
+        color: COLORS[Math.floor(Math.random() * COLORS.length)],
+        vx: (Math.random() - 0.5) * 3,
+        vy: Math.random() * 3 + 1.5,
+        rot: Math.random() * Math.PI * 2,
+        vrot: (Math.random() - 0.5) * 0.15,
+    }));
+    let cf = 0;
+    const maxF = 300;
+    function draw() {
+        cctx.clearRect(0, 0, cc.width, cc.height);
+        const opacity = cf > maxF - 60 ? (maxF - cf) / 60 : 1;
+        particles.forEach(p => {
+            p.x += p.vx; p.y += p.vy; p.rot += p.vrot;
+            if (p.y > cc.height + 10) { p.y = -10; p.x = Math.random() * cc.width; }
+            cctx.save();
+            cctx.globalAlpha = opacity;
+            cctx.translate(p.x, p.y);
+            cctx.rotate(p.rot);
+            cctx.fillStyle = p.color;
+            cctx.fillRect(-p.w / 2, -p.h / 2, p.w, p.h);
+            cctx.restore();
+        });
+        cf++;
+        if (cf < maxF) requestAnimationFrame(draw);
+        else { cc.style.display = 'none'; cctx.clearRect(0, 0, cc.width, cc.height); }
+    }
+    draw();
+}
+
+function endGame(message) {
+    if (window.mpOnGameEnd) { const fn = window.mpOnGameEnd; window.mpOnGameEnd = null; fn(); }
+    isGameOver = true;
+    gameOverScreen.classList.remove('hidden');
+    gameOverScreen.classList.remove('leaderboard-glow');
+    document.getElementById('gameOverTitle').innerText = message;
+
+    const profit = portfolioAmount - START_PORTFOLIO;
+    const profitPct = (profit / START_PORTFOLIO) * 100;
+    finalScoreElement.innerText = `$${portfolioAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    finalTimeElement.innerText = `${Math.floor(frames / 60)}s`;
+
+    // Downsample price history for calendar mini-charts (~50 points)
+    const snapshotStep = Math.max(1, Math.floor(priceHistory.length / 50));
+    const priceSnapshot = [];
+    for (let i = 0; i < priceHistory.length; i += snapshotStep) priceSnapshot.push(priceHistory[i].price);
+
+    const isoDate = new Date().toISOString().slice(0, 10);
+    const sessionMode = spyMode
+        ? (spyLevelLabel.includes('Open') ? 'open' : spyLevelLabel.includes('Close') ? 'close' : 'full')
+        : 'sim';
+
+    const entry = {
+        profit: profit,
+        profitPercent: profitPct,
+        startPortfolio: START_PORTFOLIO,
+        time: Math.floor(frames / 60),
+        timestamp: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+        isoDate: isoDate,
+        ticker: activeTicker,
+        mode: sessionMode,
+        priceSnapshot: priceSnapshot,
+    };
+
+    // All sessions (cap at 300)
+    allSessions.push(entry);
+    if (allSessions.length > 300) allSessions.shift();
+    localStorage.setItem('nyan_all_sessions', JSON.stringify(allSessions));
+
+    // Derive top-5 leaderboard
+    leaderboard = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 5);
+    const posIdx = leaderboard.findIndex(e => e === entry);
+    const leaderboardPos = (posIdx >= 0 && posIdx < 5) ? posIdx + 1 : null;
+    localStorage.setItem('nyan_leaderboard', JSON.stringify(leaderboard));
+
+    // Result summary
+    const resultAmountEl = document.getElementById('resultAmount');
+    const resultMessageEl = document.getElementById('resultMessage');
+    const leaderboardPosEl = document.getElementById('leaderboardPosition');
+    const sign = profit >= 0 ? '+' : '';
+    resultAmountEl.innerText = `${sign}$${Math.abs(profit).toLocaleString(undefined, {minimumFractionDigits: 2})} (${sign}${profitPct.toFixed(2)}%)`;
+    resultAmountEl.className = profit >= 0 ? 'profit' : 'loss';
+
+    const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
+    if (leaderboardPos) {
+        leaderboardPosEl.innerHTML = `${medals[leaderboardPos - 1]} Wall of Fame &mdash; #${leaderboardPos}!`;
+        leaderboardPosEl.className = 'result-leaderboard';
+        resultMessageEl.innerText = profit >= 0 ? "Legendary session. You're on the board!" : 'Even in losses, you made history.';
+        gameOverScreen.classList.add('leaderboard-glow');
+        playFanfare();
+    } else {
+        leaderboardPosEl.innerText = '';
+        leaderboardPosEl.className = '';
+        resultMessageEl.innerText = profit > 0 ? 'Nice trading! Keep grinding.' : 'Markets are tough. Come back stronger.';
+    }
+
+    if (profit > 0) startConfetti();
+
+    updateLeaderboardUI(leaderboardPos);
+    bgMusic.pause();
+    musicStarted = false;
+}
+
+function updateLeaderboardUI(highlightPos) {
+    const topEntries = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 5);
+    highScoresList.innerHTML = topEntries.map((s, i) => {
+        const isHighlight = highlightPos != null && i === highlightPos - 1;
+        const startAmt = s.startPortfolio != null
+            ? `$${s.startPortfolio.toLocaleString()} start`
+            : 'Unknown start';
+        const profitStr = `${s.profit >= 0 ? '+' : ''}$${Math.abs(s.profit).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
+        const sign = s.profit >= 0 ? '+' : '-';
+        const pctStr = s.profitPercent != null
+            ? ` (${sign}${Math.abs(s.profitPercent).toFixed(2)}%)`
+            : '';
+        const pnlClass = s.profit >= 0 ? 'profit' : 'loss';
+        const badge = [s.ticker || 'BTC/USD', s.mode || 'sim', s.timestamp || ''].filter(Boolean).join(' · ');
+        return `
+            <li class="${isHighlight ? 'lb-highlight' : ''}">
+                <div class="lb-name">${isHighlight ? '▶ ' : ''}${startAmt}</div>
+                <div class="lb-pnl ${pnlClass}">${profitStr}${pctStr}</div>
+                <div class="lb-meta">
+                    <span class="lb-time">${s.time}s session</span>
+                    <span class="lb-badge">${badge}</span>
+                </div>
+            </li>
+        `;
+    }).join('');
+}
+
+function resetGame(startPrice) {
+    spyBarIdx = 0;
+    spyFrameCounter = 0;
+    if (spyMode && spyBars.length > 0) {
+        currentBTCPrice = spyBars[0].o;
+        setIndicator(spyLevelLabel, '#00cfff', activeTicker);
+        const maxSpeed = spyIsLive ? 1 : 120;
+        const slider = document.getElementById('speedSlider');
+        slider.max = maxSpeed;
+        spySpeed = 60;
+        slider.value = 60;
+        spyFramesPerBar = Math.max(1, Math.round(3600 / spySpeed));
+        document.getElementById('speedLabel').textContent = '60x';
+        document.getElementById('speedControl').style.display = spyIsLive ? 'none' : '';
+    } else {
+        const tickerFallback = activeTicker === 'BTC/USD' ? (livePrice || 65000.00) : activeTicker === 'SPY' ? 500.00 : 100.00;
+        currentBTCPrice = startPrice || tickerFallback;
+        document.getElementById('speedControl').style.display = 'none';
+        if (DATA_SOURCE === 'sim') setIndicator('SIM', '#888', activeTicker);
+    }
+    cat.x = 100; cat.y = canvas.height / 2; cat.isHit = false; cat.trail = []; cat.priceOffsetY = 0;
+    priceHistory.length = 0; trades.length = 0; smoothedPriceY = 0;
+    ema12.length = 0; ema26.length = 0; macdLine.length = 0; signalLine.length = 0; histogram.length = 0;
+    portfolioAmount = START_PORTFOLIO; livesCount = 3; frames = 0; openPosition = 0;
+    isGameOver = false; isPaused = false;
+    tapeList.innerHTML = '';
+    gameOverScreen.classList.add('hidden');
+    gameOverScreen.classList.remove('leaderboard-glow');
+    document.getElementById('resultAmount').innerText = '';
+    document.getElementById('leaderboardPosition').innerText = '';
+    document.getElementById('resultMessage').innerText = '';
+    animate();
+}
+
+// Canvas sizing
+function resizeCanvas() {
+    const container = document.getElementById('canvas-container');
+    canvas.width = container.clientWidth;
+    canvas.height = container.clientHeight;
+    smoothedPriceY = 0;
+}
+
+window.addEventListener('resize', () => {
+    resizeCanvas();
+    cat.x = Math.min(cat.x, canvas.width - cat.width);
+    cat.y = Math.min(cat.y, canvas.height - cat.height);
+});
+
+function animate() {
+    if (isGameOver) return;
+    if (isPaused) {
+        requestAnimationFrame(animate);
+        return;
+    }
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    updateMarket();
+    drawBackground();
+    cat.update();
+    cat.draw();
+    if (window.opponentState) drawOpponentCat(window.opponentState);
+    updateHUD();
+    frames++;
+    const spyDone = spyMode && spyBarIdx >= spyBars.length - 1 && spyFrameCounter >= spyFramesPerBar - 1;
+    if (spyDone || (!spyMode && frames >= LEVEL_DURATION)) endGame(spyMode ? 'SPY Level Complete!' : 'Session Closed!');
+    else requestAnimationFrame(animate);
+}
+
+restartBtn.addEventListener('click', () => {
+    gameOverScreen.classList.add('hidden');
+    showLevelSelect();
+});
+document.getElementById('quickPlayBTCBtn').addEventListener('click', () => startQuickPlay('BTC/USD', true));
+document.getElementById('quickPlaySPYBtn').addEventListener('click', () => startQuickPlay('SPY', false));
+
+// Speed toast
+const speedToastEl = document.getElementById('speed-toast');
+let speedSettleTimer = null;
+function showSpeedToast(speed) {
+    clearTimeout(speedSettleTimer);
+    speedSettleTimer = setTimeout(() => {
+        speedToastEl.textContent = speed + 'x';
+        speedToastEl.classList.add('visible');
+        setTimeout(() => speedToastEl.classList.remove('visible'), 1400);
+    }, 1000);
+}
+
+document.getElementById('speedSlider').addEventListener('input', function () {
+    let v = parseInt(this.value, 10);
+    const maxSpeed = spyIsLive ? 1 : 120;
+    v = Math.min(v, maxSpeed);
+    this.value = v;
+    // Magnetic snap to meaningful real-time multiples (within ±2)
+    const snaps = [1, 5, 10, 30, 60, 90, 120];
+    for (const s of snaps) {
+        if (s <= maxSpeed && Math.abs(v - s) <= 2) { v = s; this.value = v; break; }
+    }
+    spySpeed = v;
+    document.getElementById('speedLabel').textContent = spySpeed + 'x';
+    if (spyMode && spyBars.length > 0) {
+        spyFramesPerBar = Math.max(1, Math.round(3600 / spySpeed));
+        const remainingBars = spyBars.length - spyBarIdx;
+        LEVEL_DURATION = frames + remainingBars * spyFramesPerBar;
+    }
+    showSpeedToast(spySpeed);
+});
+
+// Progress scrubber
+function scrubToPercent(pct) {
+    if (!spyMode || spyBars.length === 0) return;
+    spyBarIdx = Math.round(Math.max(0, Math.min(1, pct)) * (spyBars.length - 1));
+    spyFrameCounter = 0;
+    currentBTCPrice = spyBars[spyBarIdx].o;
+    priceHistory.length = 0;
+    ema12.length = 0; ema26.length = 0;
+    macdLine.length = 0; signalLine.length = 0; histogram.length = 0;
+    smoothedPriceY = 0;
+}
+
+function scrubPctFromEvent(e) {
+    const rect = progressContainer.getBoundingClientRect();
+    const clientX = e.touches ? e.touches[0].clientX : e.clientX;
+    return (clientX - rect.left) / rect.width;
+}
+
+let isScrubbing = false;
+
+progressContainer.addEventListener('mousedown', (e) => {
+    if (!spyMode) return;
+    isScrubbing = true;
+    progressContainer.classList.add('scrubbing');
+    scrubToPercent(scrubPctFromEvent(e));
+});
+
+document.addEventListener('mousemove', (e) => {
+    if (!isScrubbing) return;
+    scrubToPercent(scrubPctFromEvent(e));
+});
+
+document.addEventListener('mouseup', () => {
+    isScrubbing = false;
+    progressContainer.classList.remove('scrubbing');
+});
+
+progressContainer.addEventListener('touchstart', (e) => {
+    if (!spyMode) return;
+    isScrubbing = true;
+    progressContainer.classList.add('scrubbing');
+    scrubToPercent(scrubPctFromEvent(e));
+}, { passive: true });
+
+document.addEventListener('touchmove', (e) => {
+    if (!isScrubbing) return;
+    scrubToPercent(scrubPctFromEvent(e));
+}, { passive: true });
+
+document.addEventListener('touchend', () => {
+    isScrubbing = false;
+    progressContainer.classList.remove('scrubbing');
+});
+
+// Tape column toggles
+const timeAndSalesEl = document.getElementById('timeAndSales');
+document.querySelectorAll('.tape-toggle').forEach(btn => {
+    const col = btn.dataset.col;
+    btn.addEventListener('click', () => {
+        btn.classList.toggle('active');
+        timeAndSalesEl.classList.toggle(`hide-${col}`);
+    });
+});
+
+// ---- Calendar / Leaderboard ----
+let calendarYear = new Date().getFullYear();
+let calendarMonth = new Date().getMonth();
+let calendarActiveTab = 'monthly';
+
+function showCalendar() {
+    isPaused = true;
+    bgMusic.pause();
+    calendarYear = new Date().getFullYear();
+    calendarMonth = new Date().getMonth();
+    renderCalendar();
+    document.getElementById('calendarModal').classList.remove('hidden');
+}
+
+function hideCalendar() {
+    document.getElementById('calendarModal').classList.add('hidden');
+    if (!isGameOver) {
+        isPaused = false;
+        if (musicStarted) bgMusic.play();
+    }
+}
+
+function renderCalendar() {
+    const monthLabel = new Date(calendarYear, calendarMonth, 1)
+        .toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    document.getElementById('calMonthLabel').textContent = monthLabel;
+
+    if (calendarActiveTab === 'monthly') {
+        document.getElementById('calGrid').classList.remove('hidden');
+        document.getElementById('calAllSessions').classList.add('hidden');
+        renderCalendarGrid();
+    } else {
+        document.getElementById('calGrid').classList.add('hidden');
+        document.getElementById('calDayDetail').classList.add('hidden');
+        document.getElementById('calAllSessions').classList.remove('hidden');
+        renderAllSessions();
+    }
+}
+
+function renderCalendarGrid() {
+    const year = calendarYear;
+    const month = calendarMonth;
+    const yearMonthStr = `${year}-${String(month + 1).padStart(2, '0')}`;
+
+    // Build daily scores map
+    const dailyScores = {};
+    allSessions.forEach(s => {
+        if (!s.isoDate || !s.isoDate.startsWith(yearMonthStr)) return;
+        const day = s.isoDate.slice(8, 10);
+        if (!dailyScores[day]) dailyScores[day] = [];
+        dailyScores[day].push(s);
+    });
+
+    const firstDay = new Date(year, month, 1).getDay();
+    const daysInMonth = new Date(year, month + 1, 0).getDate();
+
+    let html = '<div class="cal-weekdays">';
+    ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'].forEach(d => html += `<div class="cal-wd">${d}</div>`);
+    html += '</div><div class="cal-days">';
+
+    for (let i = 0; i < firstDay; i++) html += '<div class="cal-day empty"></div>';
+
+    for (let d = 1; d <= daysInMonth; d++) {
+        const dayStr = String(d).padStart(2, '0');
+        const scores = dailyScores[dayStr] ? [...dailyScores[dayStr]].sort((a, b) => b.profit - a.profit) : null;
+        const best = scores ? scores[0] : null;
+        const hasScores = best != null;
+        const profitClass = best ? (best.profit >= 0 ? 'cal-profit' : 'cal-loss') : '';
+        const isoDate = `${yearMonthStr}-${dayStr}`;
+
+        html += `<div class="cal-day ${profitClass} ${hasScores ? 'cal-has-scores' : ''}"
+                      ${hasScores ? `onclick="showCalDayDetail('${isoDate}')"` : ''}>
+            <div class="cal-day-num">${d}</div>
+            ${best ? `<div class="cal-day-pnl">${best.profit >= 0 ? '+' : ''}$${Math.abs(best.profit).toFixed(0)}</div>` : ''}
+            ${best ? renderMiniChart(best.priceSnapshot, 58, 22) : ''}
+        </div>`;
+    }
+
+    html += '</div>';
+    document.getElementById('calGrid').innerHTML = html;
+    document.getElementById('calDayDetail').classList.add('hidden');
+}
+
+function renderMiniChart(snapshot, w, h) {
+    if (!snapshot || snapshot.length < 2) return '';
+    w = w || 58; h = h || 22;
+    const min = Math.min(...snapshot);
+    const max = Math.max(...snapshot);
+    const range = max - min || 1;
+    const pts = snapshot.map((p, i) => {
+        const x = (i / (snapshot.length - 1)) * w;
+        const y = h - ((p - min) / range) * h;
+        return `${x.toFixed(1)},${y.toFixed(1)}`;
+    }).join(' ');
+    const color = snapshot[snapshot.length - 1] >= snapshot[0] ? '#00ff88' : '#ff4444';
+    return `<svg width="${w}" height="${h}" class="cal-chart" style="overflow:visible"><polyline points="${pts}" fill="none" stroke="${color}" stroke-width="1.5"/></svg>`;
+}
+
+function showCalDayDetail(isoDate) {
+    const sessions = allSessions.filter(s => s.isoDate === isoDate);
+    if (!sessions.length) return;
+    sessions.sort((a, b) => b.profit - a.profit);
+
+    const dateLabel = new Date(isoDate + 'T12:00:00Z')
+        .toLocaleDateString(undefined, { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' });
+
+    const detail = document.getElementById('calDayDetail');
+    detail.innerHTML = `
+        <div class="cal-detail-header">${dateLabel} — ${sessions.length} session${sessions.length > 1 ? 's' : ''}</div>
+        ${sessions.map(s => `
+            <div class="cal-session ${s.profit >= 0 ? 'cal-profit' : 'cal-loss'}">
+                <div class="cal-session-pnl">
+                    ${s.profit >= 0 ? '+' : ''}$${Math.abs(s.profit).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>
+                    <span style="font-size:10px;font-weight:normal;color:${s.profit >= 0 ? '#00aa55' : '#aa2222'}">${s.profit >= 0 ? '+' : ''}${(s.profitPercent || 0).toFixed(2)}%</span>
+                </div>
+                <div class="cal-session-meta">
+                    ${s.ticker || 'BTC/USD'} · ${s.mode || 'sim'} · ${s.time}s<br>
+                    ${s.startPortfolio ? '$' + s.startPortfolio.toLocaleString() + ' start' : ''}
+                </div>
+                ${renderMiniChart(s.priceSnapshot, 80, 34)}
+            </div>
+        `).join('')}
+    `;
+    detail.classList.remove('hidden');
+}
+
+function renderAllSessions() {
+    const container = document.getElementById('calAllSessions');
+    const sorted = [...allSessions].sort((a, b) =>
+        (b.isoDate || '').localeCompare(a.isoDate || '') || b.profit - a.profit);
+
+    if (sorted.length === 0) {
+        container.innerHTML = '<div style="text-align:center;color:#444;padding:24px;font-family:monospace;">No sessions recorded yet.</div>';
+        return;
+    }
+
+    container.innerHTML = sorted.map(s => `
+        <div class="cal-all-entry ${s.profit >= 0 ? 'cal-profit' : 'cal-loss'}">
+            <div class="cal-all-date">${s.isoDate || s.timestamp || '—'}</div>
+            <div class="cal-all-pnl">
+                ${s.profit >= 0 ? '+' : ''}$${Math.abs(s.profit).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}<br>
+                <span style="font-size:9px;font-weight:normal">${s.profit >= 0 ? '+' : ''}${(s.profitPercent || 0).toFixed(2)}%</span>
+            </div>
+            <div class="cal-all-meta">${s.ticker || 'BTC/USD'} · ${s.mode || 'sim'} · ${s.time}s</div>
+            ${renderMiniChart(s.priceSnapshot, 68, 26)}
+        </div>
+    `).join('');
+}
+
+// Calendar event listeners
+document.getElementById('calendarBtn').addEventListener('click', showCalendar);
+document.getElementById('calCloseBtn').addEventListener('click', hideCalendar);
+document.getElementById('calPrevMonth').addEventListener('click', () => {
+    calendarMonth--;
+    if (calendarMonth < 0) { calendarMonth = 11; calendarYear--; }
+    renderCalendar();
+});
+document.getElementById('calNextMonth').addEventListener('click', () => {
+    calendarMonth++;
+    if (calendarMonth > 11) { calendarMonth = 0; calendarYear++; }
+    renderCalendar();
+});
+document.getElementById('calTabMonthly').addEventListener('click', () => {
+    calendarActiveTab = 'monthly';
+    document.querySelectorAll('.cal-tab').forEach(t => t.classList.toggle('active', t.id === 'calTabMonthly'));
+    renderCalendar();
+});
+document.getElementById('calTabAll').addEventListener('click', () => {
+    calendarActiveTab = 'all';
+    document.querySelectorAll('.cal-tab').forEach(t => t.classList.toggle('active', t.id === 'calTabAll'));
+    renderCalendar();
+});
+
+// Ticker selector tabs
+document.querySelectorAll('.ticker-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+        const tickerVal = tab.dataset.ticker;
+        if (tickerVal === 'custom') {
+            document.getElementById('customTickerInput').classList.remove('hidden');
+            document.getElementById('customTickerInput').focus();
+            document.querySelectorAll('.ticker-tab').forEach(t => t.classList.toggle('active', t === tab));
+        } else {
+            activeTicker = tickerVal;
+            activeTickerIsCrypto = tickerVal === 'BTC/USD';
+            localStorage.setItem('nyan_active_ticker', activeTicker);
+            document.getElementById('customTickerInput').classList.add('hidden');
+            document.getElementById('historicalSectionLabel').textContent = `${activeTicker} Historical Levels`;
+            document.querySelectorAll('.ticker-tab').forEach(t => t.classList.toggle('active', t === tab));
+            renderLevelGrid();
+        }
+    });
+});
+
+document.getElementById('customTickerInput').addEventListener('input', function () {
+    const val = this.value.trim().toUpperCase();
+    this.value = val;
+    if (val.length >= 1) {
+        activeTicker = val;
+        activeTickerIsCrypto = false;
+        localStorage.setItem('nyan_active_ticker', activeTicker);
+        document.getElementById('historicalSectionLabel').textContent = `${activeTicker} Historical Levels`;
+        renderLevelGrid();
+    }
+});
+
+// Init
+resizeCanvas();
+cat.y = canvas.height / 2;
+updateLeaderboardUI();
+showLevelSelect();
+
+// ---- Multiplayer API (used by multiplayer.js) ----
+window.mpOnGameEnd = null;
+window.gameAPI = {
+    getState()  { return { catY: cat.y, pct: START_PORTFOLIO > 0 ? ((portfolioAmount - START_PORTFOLIO) / START_PORTFOLIO) * 100 : 0, alive: livesCount > 0, isOver: isGameOver }; },
+    setOpponent(state) { window.opponentState = state; },
+    setLivePrice(p)    { if (typeof p === 'number' && !isNaN(p)) livePrice = p; },
+    endGame(msg)       { if (!isGameOver) endGame(msg || 'Race Over!'); },
+    get isGameOver()   { return isGameOver; },
+    get currentPrice() { return currentBTCPrice; },
+};
