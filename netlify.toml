@@ -1,0 +1,8 @@
+# nyan-web is a static site — no build step.
+# The bridge/ subdir's package.json is for an OPTIONAL local IBKR bridge
+# that users run on their own machine; don't try to npm install it here.
+
+[build]
+  publish = "."
+  command = ""
+  ignore = "/bin/false"
