@@ -607,7 +607,9 @@ function addTradeMarker(type, price) {
         type: type,
         price: price,
         frame: frames,
-        x: (priceHistory.length / chartCapacity) * canvas.width
+        x: (priceHistory.length / chartCapacity) * canvas.width,
+        catX: cat.x,   // capture cat position so we can mark the trail later
+        catY: cat.y,
     });
 }
 
@@ -781,6 +783,38 @@ const cat = {
                 ctx.fillRect(this.x + 25 - (i * segmentWidth) - segmentWidth, this.y + 12 + (j * 6) + waveY, segmentWidth + 2, 6);
             }
         }
+
+        // Trade markers along the trail — filled triangles where BUY/SELL fired.
+        // Position scrolls left with the trail (matches the per-frame trail offset).
+        trades.forEach(t => {
+            if (t.catX == null) return;
+            const tx = t.catX + 40 - (frames - t.frame) * 0.5;
+            const ty = t.catY + 30;
+            if (tx < -20 || tx > canvas.width) return;
+
+            ctx.save();
+            ctx.shadowBlur = 8;
+            if (t.type === 'BUY') {
+                ctx.fillStyle = '#00ff00';
+                ctx.shadowColor = '#00ff00';
+                ctx.beginPath();
+                ctx.moveTo(tx, ty - 9);
+                ctx.lineTo(tx - 7, ty + 4);
+                ctx.lineTo(tx + 7, ty + 4);
+                ctx.closePath();
+                ctx.fill();
+            } else {
+                ctx.fillStyle = '#ff2222';
+                ctx.shadowColor = '#ff2222';
+                ctx.beginPath();
+                ctx.moveTo(tx, ty + 9);
+                ctx.lineTo(tx - 7, ty - 4);
+                ctx.lineTo(tx + 7, ty - 4);
+                ctx.closePath();
+                ctx.fill();
+            }
+            ctx.restore();
+        });
 
         this.animFrame = Math.floor(frames / 8) % frameCount;
         const currentFrame = nyanFrames[this.animFrame];
@@ -957,7 +991,8 @@ function drawBackground() {
         ctx.restore();
     }
 
-    // Player trade markers — solid filled + glow (drawn on top of optimal signals)
+    // Player trade markers on the chart — outline only.
+    // Filled versions are drawn on the cat trail (see cat.draw()).
     trades.forEach(t => {
         const pointsBack = (frames - t.frame) / 5;
         const x = anchorX - pointsBack * stepX;
@@ -966,26 +1001,27 @@ function drawBackground() {
         if (x < 0) return;
 
         ctx.save();
+        ctx.lineWidth = 2;
         if (t.type === 'BUY') {
             ctx.shadowBlur = 18;
             ctx.shadowColor = '#00ff00';
-            ctx.fillStyle = '#00ff00';
+            ctx.strokeStyle = '#00ff00';
             ctx.beginPath();
             ctx.moveTo(x, y + 10);
             ctx.lineTo(x - 9, y + 26);
             ctx.lineTo(x + 9, y + 26);
             ctx.closePath();
-            ctx.fill();
+            ctx.stroke();
         } else {
             ctx.shadowBlur = 18;
             ctx.shadowColor = '#ff2222';
-            ctx.fillStyle = '#ff2222';
+            ctx.strokeStyle = '#ff2222';
             ctx.beginPath();
             ctx.moveTo(x, y - 10);
             ctx.lineTo(x - 9, y - 26);
             ctx.lineTo(x + 9, y - 26);
             ctx.closePath();
-            ctx.fill();
+            ctx.stroke();
         }
         ctx.restore();
     });
