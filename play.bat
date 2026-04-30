@@ -1,9 +1,9 @@
 @echo off
-title Nyan Cat: Lost in Space
+title Nyan Web
 cd /d "%~dp0"
 
-:: ── Free port 8080 if something is already on it ──────────────────────────
-for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":8080 " ^| findstr "LISTENING"') do (
+:: ── Free port 9100 if something is already on it ──────────────────────────
+for /f "tokens=5" %%a in ('netstat -aon 2^>nul ^| findstr ":9100 " ^| findstr "LISTENING"') do (
     taskkill /PID %%a /F >nul 2>&1
 )
 timeout /t 1 /nobreak >nul
@@ -28,32 +28,33 @@ set LOCAL_IP=%LOCAL_IP: =%
 cls
 echo.
 echo  =====================================================
-echo    Nyan Cat: Lost in Space  ^|  Alpaca Paper Trading
+echo    Nyan Web  ^|  Virtual Paper Trading
 echo  =====================================================
 echo.
-echo    Desktop :  http://localhost:8080
+echo    Desktop :  http://localhost:9100
 if defined LOCAL_IP (
-echo    Mobile  :  http://%LOCAL_IP%:8080  ^(same WiFi^)
+echo    Mobile  :  http://%LOCAL_IP%:9100  ^(same WiFi^)
 )
 echo.
-echo    Data source defaults to Alpaca — BTC/USD 24/7.
+echo    Default ticker SPY. Type any Yahoo symbol in-game.
+echo    Last hour replays at 60x. $1M virtual portfolio.
 echo    Close this window to stop the server.
 echo  =====================================================
 echo.
 
 :: ── Open browser after 1 s ────────────────────────────────────────────────
-start "" cmd /c "timeout /t 1 /nobreak >nul && start http://localhost:8080"
+start "" cmd /c "timeout /t 1 /nobreak >nul && start http://localhost:9100"
 
 :: ── Try python, then python3 ──────────────────────────────────────────────
 python --version >nul 2>&1
 if not errorlevel 1 (
-    python -m http.server 8080
+    python -m http.server 9100
     goto :done
 )
 
 python3 --version >nul 2>&1
 if not errorlevel 1 (
-    python3 -m http.server 8080
+    python3 -m http.server 9100
     goto :done
 )
 
