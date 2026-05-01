@@ -3,7 +3,16 @@
 ## TL;DR
 
 - Live URL **`nyan-web.netlify.app` shows the `main` branch**. Pushes to `dev-1` are NOT visible there.
-- All recent feature work is on `dev-1`. To ship: merge `dev-1` → `main`, push, wait ~30s for Netlify rebuild.
+- As of 2026-05-01 `main` and `dev-1` are in sync — last full ship merged dev-1's 10-commit run (level select rework, race mode, skins, profile, SFX, etc.) into main.
+- To ship from dev-1 going forward: merge `dev-1` → `main`, push, wait ~30s for Netlify rebuild.
+
+## Mobile / iPad
+
+- **iPad** — full desktop layout (Time & Sales side panel, race board, HUD all show). Touch on canvas right-half = BUY, left-half = SELL.
+- **Phones (≤600px)** — side panel hides; mobile-controls row (BUY / SELL / EXIT ALL) appears at the bottom. HUD wraps to 2 rows. Race board stays on the left at 88px width.
+- Pause is now a **dedicated HUD button** (⏸ Pause); also toggleable with Esc on keyboard. Tap-outside-the-card on the pause overlay also resumes.
+- Audio unlocks on first user gesture (touch or key) per iOS Safari requirements.
+- Yahoo proxy fetches work in mobile browsers (CORS handled by allorigins/corsproxy.io).
 
 ## Where things live
 
@@ -19,11 +28,11 @@
 | `main` | Deployable baseline. Stable. | https://nyan-web.netlify.app (auto on push) |
 | `dev-1` | Staging — all in-flight features. | Local only (no branch deploy) |
 
-**Currently in `dev-1` but NOT in `main`** (as of 2026-05-01, head `6ecad39`):
-- Level select rework: ticker input + Last Open / Last 60 min buttons (no more BTC/SPY tabs).
+**Currently in `main` (and `dev-1` — they're in sync as of 2026-05-01):**
+- Level select: ticker input + Last Open / Last 60 min buttons.
 - Trade markers: outline on chart, filled on cat trail.
-- ESC → pause menu (was: instant end).
-- Top-20 leaderboard (was top-5). 10s minimum to qualify.
+- HUD pause button + Esc → pause menu. Tap-outside-card resumes on mobile.
+- Top-20 leaderboard. 10s minimum to qualify.
 - Profile onboarding (name + country flag).
 - $/sec + annualized projection on game-over screen.
 - Penny-rounding everywhere.

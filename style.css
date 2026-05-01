@@ -1183,6 +1183,18 @@ canvas {
     }
 }
 
+/* ---- Pause Button in HUD (works on touch + keyboard) ---- */
+#pauseBtn {
+    background: #220011;
+    color: #ff99cc;
+    border: 1px solid #ff99cc;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    padding: 4px 10px;
+    cursor: pointer;
+}
+#pauseBtn:hover { background: #2a1a26; }
+
 /* ---- Calendar Button in HUD ---- */
 #calendarBtn {
     background: #222;

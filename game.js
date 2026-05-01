@@ -1721,6 +1721,31 @@ function animate() {
 function showPauseMenu() { document.getElementById('pauseMenu').classList.remove('hidden'); }
 function hidePauseMenu() { document.getElementById('pauseMenu').classList.add('hidden'); }
 
+// Touch-friendly pause toggle (mobile has no Esc key).
+document.getElementById('pauseBtn')?.addEventListener('click', () => {
+    if (isGameOver) return;
+    sfxClick();
+    if (isPaused) {
+        isPaused = false;
+        hidePauseMenu();
+        if (musicStarted) bgMusic.play();
+    } else {
+        isPaused = true;
+        bgMusic.pause();
+        showPauseMenu();
+    }
+});
+
+// Tap the dim backdrop (outside the card) to resume — mobile-friendly.
+document.getElementById('pauseMenu')?.addEventListener('click', e => {
+    if (e.target.id === 'pauseMenu' && isPaused) {
+        sfxClick();
+        isPaused = false;
+        hidePauseMenu();
+        if (musicStarted) bgMusic.play();
+    }
+});
+
 document.getElementById('resumeBtn')?.addEventListener('click', () => {
     sfxClick();
     isPaused = false;
