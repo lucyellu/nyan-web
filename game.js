@@ -760,10 +760,16 @@ function drawGhostCat(g) {
         ctx.fillRect(ox + 25 - i * 10 - 10, oy + 18 + wy, 10, 14);
     }
 
-    // Variant cat sprite (animated GIF from NYAN.CAT! archive, browser handles frames)
+    // Variant cat sprite (animated GIF from NYAN.CAT! archive, browser handles frames).
+    // Aspect-fit inside box so square / wide / tall variants don't get squashed.
     const sprite = getGhostSprite(g.sprite);
     if (sprite.complete && sprite.naturalWidth > 0) {
-        ctx.drawImage(sprite, ox, oy, cat.width, cat.height);
+        const sw = sprite.naturalWidth, sh = sprite.naturalHeight;
+        const scale = Math.min(cat.width / sw, cat.height / sh);
+        const dw = sw * scale, dh = sh * scale;
+        const dx = ox + (cat.width - dw) / 2;
+        const dy = oy + (cat.height - dh) / 2;
+        ctx.drawImage(sprite, dx, dy, dw, dh);
     } else {
         // Fall back to default frame while gif loads
         const af = Math.floor(frames / 8) % frameCount;
