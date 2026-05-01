@@ -16,9 +16,12 @@ Or double-click `Nyan Web.lnk` on the Desktop.
 
 ## Branches
 
-- Work in `dev-1`. Merge to `main` only when ready to deploy (Netlify auto-deploys `main`).
-- After merging, push `main`; Netlify rebuild happens within ~30s.
-- To verify a deploy, curl `https://nyan-web.netlify.app/favicon.ico` (200) or fetch the page.
+- **`main`** is what Netlify deploys. Treat it as production.
+- **`dev-1`** is staging. All in-flight work goes here. Pushing dev-1 does NOT update the public site.
+- To deploy: `git checkout main && git merge --ff-only dev-1 && git push`. Netlify rebuilds in ~30s. Verify with `curl -sI https://nyan-web.netlify.app/`.
+- Before merging, sanity-check what's in dev-1 not on main: `git log main..dev-1 --oneline`.
+
+If a non-fast-forward merge is needed (rare — only if main has commits dev-1 doesn't), use `git merge dev-1` and resolve any conflicts; never force-push main.
 
 ## File map
 

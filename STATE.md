@@ -1,16 +1,50 @@
 # nyan-web — State
 
+## TL;DR
+
+- Live URL **`nyan-web.netlify.app` shows the `main` branch**. Pushes to `dev-1` are NOT visible there.
+- All recent feature work is on `dev-1`. To ship: merge `dev-1` → `main`, push, wait ~30s for Netlify rebuild.
+
 ## Where things live
 
 - **GitHub:** https://github.com/lucyellu/nyan-web
-- **Netlify (live):** https://nyan-web.netlify.app — auto-deploys `main` only.
+- **Netlify (live):** https://nyan-web.netlify.app — auto-deploys `main` only. Branch deploys for `dev-1` not enabled.
 - **Local:** `C:\Users\lucyl\Desktop\hold\projects\stocks_app\nyan-web`
-- **Local server:** double-click `Nyan Web.lnk` on Desktop → `play.bat` → `http://localhost:9100`.
+- **Local server:** double-click `Nyan Web.lnk` on Desktop → `play.bat` → `http://localhost:9100`. Local always shows the currently checked-out branch's working tree.
 
 ## Branch model
 
-- `main` — what Netlify serves. Slim virtual-paper game with Yahoo data, $1M default, last-hour replay, last-open replay, top-20 leaderboard, ESC pause menu, profile (name + flag), Race the Rainbow ghost-mode foundation, Plush Rush SFX, CSV export, skin unlocks.
-- `dev-1` — staging for new features ahead of `main`. Currently has everything above; merges to `main` when stable. Pushes to `dev-1` do **not** auto-deploy unless branch deploys are enabled in Netlify.
+| Branch | What's there | Where it ships |
+|---|---|---|
+| `main` | Deployable baseline. Stable. | https://nyan-web.netlify.app (auto on push) |
+| `dev-1` | Staging — all in-flight features. | Local only (no branch deploy) |
+
+**Currently in `dev-1` but NOT in `main`** (as of 2026-05-01, head `6ecad39`):
+- Level select rework: ticker input + Last Open / Last 60 min buttons (no more BTC/SPY tabs).
+- Trade markers: outline on chart, filled on cat trail.
+- ESC → pause menu (was: instant end).
+- Top-20 leaderboard (was top-5). 10s minimum to qualify.
+- Profile onboarding (name + country flag).
+- $/sec + annualized projection on game-over screen.
+- Penny-rounding everywhere.
+- Plush Rush SFX module (procedural, no audio files).
+- 25 nyan variant GIFs in `assets/cats/`.
+- Race the Rainbow: top-4 ghost replay, rank-based X position, live BUY/SELL flashes in flip-board.
+- Skin unlocks Phase 1 (7 skins, 🎨 button in HUD).
+- Cat height 60→72.
+
+## Deploy
+
+```bash
+cd C:/Users/lucyl/Desktop/hold/projects/stocks_app/nyan-web
+git checkout main
+git merge --ff-only dev-1     # if dev-1 is just ahead, fast-forward; otherwise resolve
+git push
+# Wait ~30s, then verify:
+curl -sI https://nyan-web.netlify.app/ | head -1
+```
+
+Or just say "merge dev-1 to main" and I'll do it.
 
 ## Architecture (what to know)
 
@@ -44,8 +78,10 @@
 
 ## Next ideas (not done)
 
+- **Deploy current dev-1 to main** — most-pressing; live site is 10 commits behind.
 - Fill out the remaining ~18 skin unlock criteria (current Phase 1 has 6 unlockable).
-- Ghost trade markers on chart + trail (currently only player has them).
-- Better unlock toast animation; "active skin" indicator in HUD.
-- `dev-1` Netlify branch deploy URL.
-- Wick Rider + myspot favicon sync (was Phase 2 of the cross-app favicon sync).
+- Ghost trade markers on chart + trail (currently only player has them; flip-board flashes are the only ghost-trade indicator).
+- "Active skin" preview in HUD next to the 🎨 button.
+- Enable Netlify branch deploys for `dev-1` so `dev-1--nyan-web.netlify.app` exists for staging review.
+- Wick Rider + myspot favicon sync (Phase 2 of the cross-app favicon sync — neither has a local favicon source yet).
+- Convert the 60MB + 18MB WAVs to OGG to drop repo size and remove GitHub's >50MB warnings.
