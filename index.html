@@ -22,6 +22,9 @@
         <div class="hud-item" id="settingsSelector">
             <button id="settingsBtn">⚙️ Settings</button>
         </div>
+        <div class="hud-item" id="skinsSelector">
+            <button id="skinsBtn">🎨 Skins</button>
+        </div>
         <div class="hud-item" id="calendarSelector">
             <button id="calendarBtn">&#128197; Board</button>
         </div>
@@ -154,7 +157,19 @@
             <ul id="highScores"></ul>
         </div>
 
+        <div id="unlockToast" class="hidden"></div>
+
         <button id="restartBtn">New Session</button>
+    </div>
+
+    <!-- Skins picker modal -->
+    <div id="skinsModal" class="hidden">
+        <div class="skins-card">
+            <h2>&#127912; Cat Skins</h2>
+            <p class="skins-sub">Unlock more by playing. Click an unlocked skin to use it.</p>
+            <div id="skinsGrid"></div>
+            <button id="skinsCloseBtn">Close</button>
+        </div>
     </div>
 
     <!-- Calendar / Leaderboard Modal -->

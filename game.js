@@ -1000,10 +1000,22 @@ const cat = {
             ctx.restore();
         });
 
-        this.animFrame = Math.floor(frames / 8) % frameCount;
-        const currentFrame = nyanFrames[this.animFrame];
-        if (currentFrame.complete) {
-            ctx.drawImage(currentFrame, this.x, this.y, this.width, this.height);
+        // Active skin: default = 6-frame SVG animation; otherwise = single GIF (browser auto-loops).
+        const skin = SKINS.find(s => s.id === activeSkin);
+        if (skin && skin.file) {
+            const sprite = getGhostSprite(skin.file);
+            if (sprite.complete && sprite.naturalWidth > 0) {
+                const sw = sprite.naturalWidth, sh = sprite.naturalHeight;
+                const scale = Math.min(this.width / sw, this.height / sh);
+                const dw = sw * scale, dh = sh * scale;
+                ctx.drawImage(sprite, this.x + (this.width - dw) / 2, this.y + (this.height - dh) / 2, dw, dh);
+            }
+        } else {
+            this.animFrame = Math.floor(frames / 8) % frameCount;
+            const currentFrame = nyanFrames[this.animFrame];
+            if (currentFrame.complete) {
+                ctx.drawImage(currentFrame, this.x, this.y, this.width, this.height);
+            }
         }
     },
 
@@ -1496,6 +1508,27 @@ function endGame(message) {
         localStorage.setItem('nyan_leaderboard', JSON.stringify(leaderboard));
     }
 
+    // Update progression and check for newly unlocked skins (only for qualifying sessions).
+    let newlyUnlocked = [];
+    if (qualifiesForLeaderboard) {
+        bumpProgress(profit, leaderboardPos);
+        newlyUnlocked = checkUnlocks();
+    }
+    const toast = document.getElementById('unlockToast');
+    if (toast) {
+        if (newlyUnlocked.length > 0) {
+            toast.innerHTML = newlyUnlocked.map(s =>
+                `<div class="unlock-row">
+                    <img src="assets/cats/${s.file}" alt="">
+                    <span>&#127873; New skin unlocked: <strong>${s.name}</strong></span>
+                </div>`).join('');
+            toast.classList.remove('hidden');
+        } else {
+            toast.classList.add('hidden');
+            toast.innerHTML = '';
+        }
+    }
+
     // Result summary
     const resultAmountEl = document.getElementById('resultAmount');
     const resultMessageEl = document.getElementById('resultMessage');
@@ -1715,6 +1748,95 @@ function clearRaceMode() {
     const board = document.getElementById('raceBoard');
     if (board) board.style.display = 'none';
 }
+
+// ---- Skin unlocks (Phase 1: 7 skins) ----
+const SKINS = [
+    { id: 'default',   name: 'Classic Nyan',     file: null,                          criterion: 'Always available',     check: () => true },
+    { id: 'original',  name: 'Original',         file: 'imgi_48_original.gif',        criterion: 'First profitable run', check: p => p.totalWins >= 1 },
+    { id: 'tech',      name: 'Technicolor',      file: 'imgi_5_technyancolor.gif',    criterion: 'Play 5 sessions',      check: p => p.totalSessions >= 5 },
+    { id: 'doge',      name: 'Nyan Doge',        file: 'imgi_3_nyandoge.gif',         criterion: 'Play 10 sessions',     check: p => p.totalSessions >= 10 },
+    { id: 'gb',        name: 'Game Boy',         file: 'imgi_4_GB.gif',               criterion: 'Wall of Fame (top 20)',check: p => p.everInTop20 },
+    { id: 'pumpkin',   name: 'Pumpkin Nyan',     file: 'imgi_15_pumpkin.gif',         criterion: 'Top 3 finish',         check: p => p.everTopThree },
+    { id: 'retro',     name: 'Retro Nyan',       file: 'imgi_19_retro.gif',           criterion: 'Ranked #1',            check: p => p.everFirst },
+];
+const PROGRESS_KEY = 'nyan_progress';
+const UNLOCKS_KEY  = 'nyan_unlocks';
+const ACTIVE_SKIN_KEY = 'nyan_active_skin';
+let progress = (() => {
+    try { return JSON.parse(localStorage.getItem(PROGRESS_KEY)) || null; } catch { return null; }
+})() || { totalSessions: 0, totalWins: 0, everInTop20: false, everTopThree: false, everFirst: false };
+let unlocked = (() => {
+    try { return JSON.parse(localStorage.getItem(UNLOCKS_KEY)) || ['default']; } catch { return ['default']; }
+})();
+let activeSkin = localStorage.getItem(ACTIVE_SKIN_KEY) || 'default';
+
+function bumpProgress(profit, leaderboardPos) {
+    progress.totalSessions++;
+    if (profit > 0) progress.totalWins++;
+    if (leaderboardPos != null) {
+        progress.everInTop20 = true;
+        if (leaderboardPos <= 3) progress.everTopThree = true;
+        if (leaderboardPos === 1) progress.everFirst = true;
+    }
+    localStorage.setItem(PROGRESS_KEY, JSON.stringify(progress));
+}
+
+function checkUnlocks() {
+    const newly = [];
+    for (const skin of SKINS) {
+        if (unlocked.includes(skin.id)) continue;
+        if (skin.check(progress)) {
+            unlocked.push(skin.id);
+            newly.push(skin);
+        }
+    }
+    localStorage.setItem(UNLOCKS_KEY, JSON.stringify(unlocked));
+    return newly;
+}
+
+function setActiveSkin(id) {
+    if (!unlocked.includes(id)) return false;
+    activeSkin = id;
+    localStorage.setItem(ACTIVE_SKIN_KEY, id);
+    return true;
+}
+
+// Skins picker modal
+function renderSkinsGrid() {
+    const grid = document.getElementById('skinsGrid');
+    if (!grid) return;
+    grid.innerHTML = SKINS.map(s => {
+        const isUnlocked = unlocked.includes(s.id);
+        const isActive = activeSkin === s.id;
+        const preview = s.file
+            ? `<img src="assets/cats/${s.file}" alt="${s.name}">`
+            : `<img src="assets/nyan1.svg" alt="${s.name}">`;
+        return `<div class="skin-cell ${isUnlocked ? '' : 'locked'} ${isActive ? 'active' : ''}" data-skin-id="${s.id}">
+            <div class="skin-preview">${preview}${isUnlocked ? '' : '<span class="skin-lock">🔒</span>'}</div>
+            <div class="skin-name">${s.name}</div>
+            <div class="skin-criterion">${s.criterion}</div>
+        </div>`;
+    }).join('');
+    grid.querySelectorAll('.skin-cell').forEach(cell => {
+        cell.addEventListener('click', () => {
+            const id = cell.dataset.skinId;
+            if (setActiveSkin(id)) {
+                sfxClick();
+                renderSkinsGrid();
+            }
+        });
+    });
+}
+
+document.getElementById('skinsBtn')?.addEventListener('click', () => {
+    sfxClick();
+    renderSkinsGrid();
+    document.getElementById('skinsModal').classList.remove('hidden');
+});
+document.getElementById('skinsCloseBtn')?.addEventListener('click', () => {
+    sfxClick();
+    document.getElementById('skinsModal').classList.add('hidden');
+});
 
 restartBtn.addEventListener('click', () => {
     gameOverScreen.classList.add('hidden');
