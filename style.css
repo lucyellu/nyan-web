@@ -342,6 +342,17 @@ canvas {
     border-color: #00cc00;
 }
 
+.tape-toggle.export-csv {
+    background: #001a26;
+    color: #00cfff;
+    border-color: #00cfff;
+    flex: 0 0 auto;
+}
+.tape-toggle.export-csv:hover {
+    background: #003040;
+    color: #66e0ff;
+}
+
 #timeAndSales {
     flex-grow: 1;
     overflow-y: auto;

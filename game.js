@@ -435,9 +435,8 @@ function tryStartMusic() {
 
 window.addEventListener('keydown', e => {
     if (e.code === 'Escape') {
-        isPaused = !isPaused;
-        if (isPaused) bgMusic.pause();
-        else if (musicStarted) bgMusic.play();
+        // ESC ends the session (qualifies for leaderboard if >=10s played).
+        if (!isGameOver) endGame('Session Ended');
         return;
     }
 
@@ -524,23 +523,28 @@ function executeTrade(type, pct) {
         entryPrice = tradePrice;
         addTradeMarker('BUY', tradePrice);
         addToTape(timeStr, tradePrice, 'BUY', effectiveNotional, null);
+        pushTradeLog('BUY', effectiveUnits, tradePrice, null);
         sendLiveOrder('BUY', effectiveNotional, null);
     } else if (type === 'SELL') {
         let pnl = null;
+        let unitsSold = 0;
         if (openPosition > 0) {
-            const unitsSold = Math.min(unitsToTrade, openPosition);
+            unitsSold = Math.min(unitsToTrade, openPosition);
             pnl = (tradePrice - entryPrice) * unitsSold;
             openPosition = Math.max(0, openPosition - unitsToTrade);
             sendLiveOrder('SELL', unitsSold * tradePrice, unitsSold);
         }
         addTradeMarker('SELL', tradePrice);
         addToTape(timeStr, tradePrice, 'SELL', tradeValueDollars, pnl);
+        if (unitsSold > 0) pushTradeLog('SELL', unitsSold, tradePrice, pnl);
     } else if (type === 'SELL_ALL') {
-        const pnl = openPosition > 0 ? (tradePrice - entryPrice) * openPosition : null;
-        const exitValue = openPosition * tradePrice;
-        if (openPosition > 0) sendLiveOrder('SELL', exitValue, openPosition);
+        const exitedUnits = openPosition;
+        const pnl = exitedUnits > 0 ? (tradePrice - entryPrice) * exitedUnits : null;
+        const exitValue = exitedUnits * tradePrice;
+        if (exitedUnits > 0) sendLiveOrder('SELL', exitValue, exitedUnits);
         addTradeMarker('SELL', tradePrice);
         addToTape(timeStr, tradePrice, 'EXIT', exitValue, pnl);
+        if (exitedUnits > 0) pushTradeLog('SELL', exitedUnits, tradePrice, pnl);
         openPosition = 0;
     }
 }
@@ -692,7 +696,7 @@ const cat = {
     x: 100,
     y: 0, // set after resizeCanvas
     width: 110,
-    height: 60,
+    height: 72,   // +20% taller — SVG native aspect is ~110×68; this gives a fuller cat
     speed: 6,
     isHit: false,
     hitTimer: 0,
@@ -1011,6 +1015,111 @@ function takeDamage(msg) {
     if (livesCount <= 0) endGame("Portfolio Liquidated!");
 }
 
+// ---- SFX ----
+let _sfxCtx = null;
+function _sfxGetCtx() {
+    if (!_sfxCtx) _sfxCtx = new (window.AudioContext || window.webkitAudioContext)();
+    return _sfxCtx;
+}
+
+// Mario-style coin: short B5 → E6 chirp, square wave for 8-bit feel.
+function sfxCoin() {
+    if (isMuted) return;
+    try {
+        const ctx = _sfxGetCtx();
+        const t0 = ctx.currentTime;
+        [[988, 0, 0.06], [1319, 0.07, 0.16]].forEach(([f, dt, dur]) => {
+            const o = ctx.createOscillator();
+            const g = ctx.createGain();
+            o.connect(g); g.connect(ctx.destination);
+            o.type = 'square';
+            o.frequency.value = f;
+            g.gain.setValueAtTime(0, t0 + dt);
+            g.gain.linearRampToValueAtTime(0.07, t0 + dt + 0.005);
+            g.gain.linearRampToValueAtTime(0, t0 + dt + dur);
+            o.start(t0 + dt);
+            o.stop(t0 + dt + dur);
+        });
+    } catch {}
+}
+
+// Slow descending hit: A3 → low rumble.
+function sfxHit() {
+    if (isMuted) return;
+    try {
+        const ctx = _sfxGetCtx();
+        const t0 = ctx.currentTime;
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.connect(g); g.connect(ctx.destination);
+        o.type = 'sawtooth';
+        o.frequency.setValueAtTime(220, t0);
+        o.frequency.exponentialRampToValueAtTime(70, t0 + 0.35);
+        g.gain.setValueAtTime(0.10, t0);
+        g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.35);
+        o.start(t0);
+        o.stop(t0 + 0.38);
+    } catch {}
+}
+
+// Watch portfolio over the last 1s; fire coin/hit if it moved meaningfully.
+let _sfxLastPortfolio = null;
+let _sfxLastFireFrame = -999;
+function checkPortfolioSFX() {
+    if (frames % 60 !== 0) return;
+    if (_sfxLastPortfolio === null) { _sfxLastPortfolio = portfolioAmount; return; }
+    const delta = portfolioAmount - _sfxLastPortfolio;
+    _sfxLastPortfolio = portfolioAmount;
+    // 0.05% of starting portfolio = $500 default — quiet during flat periods.
+    const threshold = (START_PORTFOLIO || 1000000) * 0.0005;
+    if (frames - _sfxLastFireFrame < 60) return;  // throttle to 1/sec
+    if (delta > threshold) { sfxCoin(); _sfxLastFireFrame = frames; }
+    else if (delta < -threshold) { sfxHit(); _sfxLastFireFrame = frames; }
+}
+
+// ---- Trade log + IBKR/TraderVue CSV export ----
+const tradeLog = [];
+
+function pushTradeLog(side, units, price, pnl) {
+    if (!units || units <= 0) return;
+    tradeLog.push({
+        when: new Date().toISOString(),
+        symbol: activeTicker,
+        side,         // 'BUY' or 'SELL'
+        qty: units,
+        price,
+        pnl,
+    });
+}
+
+// Generic TraderVue CSV (also accepted by Tradervue's IBKR import flow).
+// Header: Date,Time,Symbol,Quantity,Price,Side,Commission
+function exportTradesCSV() {
+    if (tradeLog.length === 0) {
+        addTapeNotice('No trades to export yet');
+        return;
+    }
+    const lines = ['Date,Time,Symbol,Quantity,Price,Side,Commission'];
+    for (const t of tradeLog) {
+        const d = new Date(t.when);
+        const date = d.toISOString().slice(0, 10);
+        const time = d.toISOString().slice(11, 19);
+        const side = t.side === 'BUY' ? 'B' : 'S';
+        const qty = (Math.round(t.qty * 1e6) / 1e6).toString();
+        lines.push(`${date},${time},${t.symbol},${qty},${t.price.toFixed(4)},${side},0`);
+    }
+    const csv = lines.join('\n') + '\n';
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `nyan-web_trades_${activeTicker.replace(/[\/\s]/g,'-')}_${new Date().toISOString().slice(0,10)}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+}
+
 function playFanfare() {
     try {
         const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -1105,16 +1214,22 @@ function endGame(message) {
         priceSnapshot: priceSnapshot,
     };
 
-    // All sessions (cap at 300)
-    allSessions.push(entry);
-    if (allSessions.length > 300) allSessions.shift();
-    localStorage.setItem('nyan_all_sessions', JSON.stringify(allSessions));
+    // Sessions <10s don't qualify — quick rage-quits, accidental ESC, etc.
+    const qualifiesForLeaderboard = frames >= 600;  // 10s @ 60fps
+    let leaderboardPos = null;
 
-    // Derive top-5 leaderboard
-    leaderboard = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 5);
-    const posIdx = leaderboard.findIndex(e => e === entry);
-    const leaderboardPos = (posIdx >= 0 && posIdx < 5) ? posIdx + 1 : null;
-    localStorage.setItem('nyan_leaderboard', JSON.stringify(leaderboard));
+    if (qualifiesForLeaderboard) {
+        // All sessions (cap at 300)
+        allSessions.push(entry);
+        if (allSessions.length > 300) allSessions.shift();
+        localStorage.setItem('nyan_all_sessions', JSON.stringify(allSessions));
+
+        // Derive top-20 leaderboard
+        leaderboard = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 20);
+        const posIdx = leaderboard.findIndex(e => e === entry);
+        leaderboardPos = (posIdx >= 0 && posIdx < 20) ? posIdx + 1 : null;
+        localStorage.setItem('nyan_leaderboard', JSON.stringify(leaderboard));
+    }
 
     // Result summary
     const resultAmountEl = document.getElementById('resultAmount');
@@ -1124,9 +1239,14 @@ function endGame(message) {
     resultAmountEl.innerText = `${sign}$${Math.abs(profit).toLocaleString(undefined, {minimumFractionDigits: 2})} (${sign}${profitPct.toFixed(2)}%)`;
     resultAmountEl.className = profit >= 0 ? 'profit' : 'loss';
 
-    const medals = ['🥇', '🥈', '🥉', '4️⃣', '5️⃣'];
-    if (leaderboardPos) {
-        leaderboardPosEl.innerHTML = `${medals[leaderboardPos - 1]} Wall of Fame &mdash; #${leaderboardPos}!`;
+    const medals = ['🥇', '🥈', '🥉'];
+    if (!qualifiesForLeaderboard) {
+        leaderboardPosEl.innerText = '';
+        leaderboardPosEl.className = '';
+        resultMessageEl.innerText = `Too short — ${Math.floor(frames / 60)}s session (10s minimum to save)`;
+    } else if (leaderboardPos) {
+        const medal = leaderboardPos <= 3 ? medals[leaderboardPos - 1] : `#${leaderboardPos}`;
+        leaderboardPosEl.innerHTML = `${medal} Wall of Fame &mdash; #${leaderboardPos}/20!`;
         leaderboardPosEl.className = 'result-leaderboard';
         resultMessageEl.innerText = profit >= 0 ? "Legendary session. You're on the board!" : 'Even in losses, you made history.';
         gameOverScreen.classList.add('leaderboard-glow');
@@ -1145,7 +1265,7 @@ function endGame(message) {
 }
 
 function updateLeaderboardUI(highlightPos) {
-    const topEntries = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 5);
+    const topEntries = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 20);
     highScoresList.innerHTML = topEntries.map((s, i) => {
         const isHighlight = highlightPos != null && i === highlightPos - 1;
         const startAmt = s.startPortfolio != null
@@ -1197,6 +1317,9 @@ function resetGame(startPrice) {
     portfolioAmount = START_PORTFOLIO; livesCount = 3; frames = 0; openPosition = 0;
     isGameOver = false; isPaused = false;
     tapeList.innerHTML = '';
+    tradeLog.length = 0;
+    _sfxLastPortfolio = null;
+    _sfxLastFireFrame = -999;
     gameOverScreen.classList.add('hidden');
     gameOverScreen.classList.remove('leaderboard-glow');
     document.getElementById('resultAmount').innerText = '';
@@ -1232,6 +1355,7 @@ function animate() {
     cat.draw();
     if (window.opponentState) drawOpponentCat(window.opponentState);
     updateHUD();
+    checkPortfolioSFX();
     frames++;
     const spyDone = spyMode && spyBarIdx >= spyBars.length - 1 && spyFrameCounter >= spyFramesPerBar - 1;
     if (spyDone || (!spyMode && frames >= LEVEL_DURATION)) endGame(spyMode ? 'SPY Level Complete!' : 'Session Closed!');
@@ -1251,6 +1375,9 @@ document.getElementById('quickPlayLast60Btn').addEventListener('click', () => {
     readTickerFromInput();
     startQuickPlay(activeTicker, activeTickerIsCrypto);
 });
+// Export Time & Sales as TraderVue/IBKR-compatible CSV
+document.getElementById('exportTradesBtn')?.addEventListener('click', exportTradesCSV);
+
 // Pressing Enter in the ticker input fires Last 60 min (most common quick action)
 document.getElementById('tickerInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') {
