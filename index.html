@@ -41,6 +41,7 @@
     </div>
 
     <div id="main-area">
+        <div id="raceBoard" style="display:none;"></div>
         <div id="canvas-container">
             <canvas id="gameCanvas"></canvas>
 
@@ -130,8 +131,8 @@
             </div>
             <div id="levelSelectStatus"></div>
 
-            <div class="settings-section-label" style="margin-top:16px;">Multiplayer</div>
-            <button class="mp-race-btn" onclick="if(window.openMpLobby)window.openMpLobby();else alert('Multiplayer loading…')">⚔ Race vs Friend</button>
+            <div class="settings-section-label" style="margin-top:16px;">Race Mode</div>
+            <button class="mp-race-btn" id="raceRainbowBtn" title="Race the top 6 ghosts on Last Open. Ghosts replay their actual trades on the same bars.">⚔ Race the Rainbow</button>
         </div>
     </div>
 

@@ -523,7 +523,7 @@ function executeTrade(type, pct) {
         entryPrice = tradePrice;
         addTradeMarker('BUY', tradePrice);
         addToTape(timeStr, tradePrice, 'BUY', effectiveNotional, null);
-        pushTradeLog('BUY', effectiveUnits, tradePrice, null);
+        pushTradeLog('BUY', effectiveUnits, tradePrice, null, alloc);
         sendLiveOrder('BUY', effectiveNotional, null);
     } else if (type === 'SELL') {
         let pnl = null;
@@ -536,7 +536,7 @@ function executeTrade(type, pct) {
         }
         addTradeMarker('SELL', tradePrice);
         addToTape(timeStr, tradePrice, 'SELL', tradeValueDollars, pnl);
-        if (unitsSold > 0) pushTradeLog('SELL', unitsSold, tradePrice, pnl);
+        if (unitsSold > 0) pushTradeLog('SELL', unitsSold, tradePrice, pnl, alloc);
     } else if (type === 'SELL_ALL') {
         const exitedUnits = openPosition;
         const pnl = exitedUnits > 0 ? (tradePrice - entryPrice) * exitedUnits : null;
@@ -544,7 +544,7 @@ function executeTrade(type, pct) {
         if (exitedUnits > 0) sendLiveOrder('SELL', exitValue, exitedUnits);
         addTradeMarker('SELL', tradePrice);
         addToTape(timeStr, tradePrice, 'EXIT', exitValue, pnl);
-        if (exitedUnits > 0) pushTradeLog('SELL', exitedUnits, tradePrice, pnl);
+        if (exitedUnits > 0) pushTradeLog('SELL', exitedUnits, tradePrice, pnl, 100);
         openPosition = 0;
     }
 }
@@ -598,6 +598,197 @@ function addToTape(time, price, side, qty, pnl) {
 function calculateEMA(data, period, prevEMA) {
     const k = 2 / (period + 1);
     return data * k + prevEMA * (1 - k);
+}
+
+// ---- Ghost race: replay top performers' trade timelines on the same bars ----
+// Each ghost has its own portfolio + cat sprite, fires trades from a recorded
+// schedule keyed by frame number. All ghosts watch the same currentBTCPrice as
+// the player, so positioning is fair and deterministic.
+let raceMode = false;
+const ghosts = [];
+// 6 distinct hues from the nyan rainbow palette — one per ghost lane.
+const RAINBOW_COLORS = ['#ff4444', '#ff9900', '#ffdd33', '#33dd33', '#33aaff', '#aa44ff'];
+
+function makeGhost(name, color, schedule, startPortfolio) {
+    return {
+        name,
+        color,
+        cat: { y: 0, trail: [] },        // x is locked to player so ghosts run alongside
+        startPortfolio,
+        portfolio: startPortfolio,
+        position: 0,
+        entryPrice: 0,
+        prevPrice: 0,
+        schedule: schedule || [],         // [{ frame, side, alloc }]
+        scheduleIdx: 0,
+        livesCount: 3,
+        isAlive: true,
+    };
+}
+
+// Find leaderboard entries that played the same fixed-data level.
+function loadGhostsForLevel(ticker, mode, levelDate) {
+    if (!ticker || !mode || mode === 'sim') return [];
+    return allSessions
+        .filter(s => s.ticker === ticker && s.mode === mode && s.levelDate === levelDate
+                  && Array.isArray(s.tradeLog) && s.tradeLog.length > 0)
+        .sort((a, b) => b.profit - a.profit)
+        .slice(0, 6);
+}
+
+function initGhosts(matches, startPortfolio) {
+    ghosts.length = 0;
+    if (matches.length === 0) {
+        // Synthetic baseline so the first racer of any level isn't alone.
+        ghosts.push(makeGhost(
+            'Hodl Bot',
+            RAINBOW_COLORS[0],
+            [{ frame: 0, side: 'BUY', alloc: 100 }],
+            startPortfolio,
+        ));
+        return;
+    }
+    matches.forEach((m, i) => {
+        const sign = m.profitPercent >= 0 ? '+' : '';
+        const name = `${sign}${m.profitPercent.toFixed(1)}%`;
+        ghosts.push(makeGhost(name, RAINBOW_COLORS[i], m.tradeLog, startPortfolio));
+    });
+}
+
+function executeGhostTrade(g, side, alloc) {
+    const tradeValue = g.portfolio * (alloc / 100);
+    const units = tradeValue / currentBTCPrice;
+    if (side === 'BUY') {
+        const positionValue = g.position * currentBTCPrice;
+        const freeCash = Math.max(0, g.portfolio - positionValue);
+        const effectiveValue = Math.min(tradeValue, freeCash);
+        const effectiveUnits = effectiveValue / currentBTCPrice;
+        if (effectiveUnits > 0) {
+            g.position += effectiveUnits;
+            g.entryPrice = currentBTCPrice;
+        }
+    } else if (side === 'SELL') {
+        if (g.position > 0) {
+            const unitsSold = Math.min(units, g.position);
+            g.position = Math.max(0, g.position - unitsSold);
+        }
+    }
+}
+
+function ghostsTick() {
+    if (!raceMode || ghosts.length === 0) return;
+    ghosts.forEach((g, i) => {
+        if (!g.isAlive) return;
+
+        // Fire any due trades
+        while (g.scheduleIdx < g.schedule.length && g.schedule[g.scheduleIdx].frame <= frames) {
+            const t = g.schedule[g.scheduleIdx];
+            executeGhostTrade(g, t.side, t.alloc);
+            g.scheduleIdx++;
+        }
+
+        // P&L from price movement on open position
+        if (g.position !== 0 && g.prevPrice !== 0) {
+            g.portfolio += (currentBTCPrice - g.prevPrice) * g.position;
+        }
+        g.prevPrice = currentBTCPrice;
+
+        // Drawdown lives — same rule as player (3 hearts × $1k each on $1M default).
+        const totalDrawdown = g.startPortfolio - g.portfolio;
+        const maxAllowedDrawdown = (3 - g.livesCount + 1) * HEART_LOSS_STEP;
+        if (totalDrawdown >= maxAllowedDrawdown && g.livesCount > 0) g.livesCount--;
+        if (g.livesCount <= 0) { g.isAlive = false; g.position = 0; }
+
+        // Cat position: spread across vertical band based on rank, smoothed.
+        // We compute rank below in updateRaceBoard; use stored prevRank for now.
+        const targetY = canvas.height * 0.18 + (i * (canvas.height * 0.6) / Math.max(ghosts.length - 1, 1));
+        if (g.cat.y === 0) g.cat.y = targetY;
+        g.cat.y += (targetY - g.cat.y) * 0.04;
+
+        // Trail
+        g.cat.trail.push({ x: cat.x + 40, y: g.cat.y + 30, frame: frames });
+        if (g.cat.trail.length > 800) g.cat.trail.shift();
+    });
+}
+
+function drawGhostCat(g) {
+    const ox = cat.x + 18;
+    const oy = g.cat.y;
+    const alpha = g.isAlive ? 0.5 : 0.18;
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+
+    // Solid color trail (single hue, no rainbow — keeps player's cat distinct)
+    for (let i = 0; i < 12; i++) {
+        const wy = Math.sin((frames - i * 5) * 0.2) * 6;
+        ctx.fillStyle = g.color;
+        ctx.fillRect(ox + 25 - i * 10 - 10, oy + 18 + wy, 10, 14);
+    }
+
+    // Cat sprite
+    const af = Math.floor(frames / 8) % frameCount;
+    if (nyanFrames[af]?.complete) ctx.drawImage(nyanFrames[af], ox, oy, cat.width, cat.height);
+
+    // Color outline
+    ctx.globalAlpha = alpha + 0.25;
+    ctx.strokeStyle = g.color;
+    ctx.lineWidth = 2;
+    ctx.strokeRect(ox - 2, oy - 2, cat.width + 4, cat.height + 4);
+
+    // Tiny name tag
+    ctx.font = 'bold 10px Arial';
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
+    const tw = ctx.measureText(g.name).width;
+    ctx.fillRect(ox, oy - 14, tw + 8, 12);
+    ctx.fillStyle = g.color;
+    ctx.fillText(g.name, ox + 4, oy - 4);
+
+    ctx.restore();
+}
+
+function drawGhosts() {
+    if (!raceMode) return;
+    ghosts.forEach(drawGhostCat);
+}
+
+// Live-sorted flip-board on the left.
+const _raceBoardEl = () => document.getElementById('raceBoard');
+let _lastRaceBoardFrame = -999;
+function updateRaceBoard() {
+    if (!raceMode) return;
+    if (frames - _lastRaceBoardFrame < 10) return;  // ~6 Hz
+    _lastRaceBoardFrame = frames;
+    const board = _raceBoardEl();
+    if (!board) return;
+
+    // Build standings: player + ghosts, sorted by P&L %
+    const playerPct = START_PORTFOLIO > 0 ? (portfolioAmount - START_PORTFOLIO) / START_PORTFOLIO * 100 : 0;
+    const standings = [
+        { isYou: true, name: 'YOU', color: '#ffffff', pct: playerPct, dollars: portfolioAmount - START_PORTFOLIO, alive: livesCount > 0 },
+        ...ghosts.map(g => ({
+            isYou: false, name: g.name, color: g.color,
+            pct: g.startPortfolio > 0 ? (g.portfolio - g.startPortfolio) / g.startPortfolio * 100 : 0,
+            dollars: g.portfolio - g.startPortfolio,
+            alive: g.isAlive,
+        })),
+    ].sort((a, b) => b.pct - a.pct);
+
+    const medals = ['🥇', '🥈', '🥉'];
+    board.innerHTML = standings.map((s, i) => {
+        const rank = i < 3 ? medals[i] : `<span class="rb-num">${i + 1}</span>`;
+        const sign = s.pct >= 0 ? '+' : '';
+        const dollarsAbs = Math.abs(s.dollars);
+        const dollars = `${sign}$${dollarsAbs >= 1000 ? (dollarsAbs / 1000).toFixed(1) + 'k' : dollarsAbs.toFixed(0)}`;
+        const pct = `${sign}${s.pct.toFixed(1)}%`;
+        const cls = ['rb-row', s.isYou ? 'rb-you' : '', !s.alive ? 'rb-out' : ''].filter(Boolean).join(' ');
+        return `<div class="${cls}">
+            <div class="rb-rank">${rank}</div>
+            <div class="rb-dot" style="background:${s.color}"></div>
+            <div class="rb-name">${s.isYou ? '▶ YOU' : s.name}</div>
+            <div class="rb-pnl ${s.pct >= 0 ? 'profit' : 'loss'}">${dollars}<br>${pct}</div>
+        </div>`;
+    }).join('');
 }
 
 function updateMarket() {
@@ -1080,15 +1271,17 @@ function checkPortfolioSFX() {
 // ---- Trade log + IBKR/TraderVue CSV export ----
 const tradeLog = [];
 
-function pushTradeLog(side, units, price, pnl) {
+function pushTradeLog(side, units, price, pnl, alloc) {
     if (!units || units <= 0) return;
     tradeLog.push({
         when: new Date().toISOString(),
+        frame: frames,                // relative frame, used for ghost replay
         symbol: activeTicker,
-        side,         // 'BUY' or 'SELL'
+        side,                         // 'BUY' or 'SELL'
         qty: units,
         price,
         pnl,
+        alloc,                        // % of portfolio at trade time, for portfolio-agnostic replay
     });
 }
 
@@ -1201,6 +1394,14 @@ function endGame(message) {
     const sessionMode = spyMode
         ? (spyLevelLabel.includes('Open') ? 'open' : spyLevelLabel.includes('Close') ? 'close' : 'full')
         : 'sim';
+    // Identify the exact level played so ghost replay matches bars 1:1.
+    // For Quick Play (mode='sim') we don't have a fixed-data level → not raceable.
+    const levelDate = spyMode && spyBars.length > 0
+        ? new Date(spyBars[0].t).toISOString().slice(0, 10)
+        : isoDate;
+
+    // Compact ghost-replay schedule: keep only fields needed to re-execute trades.
+    const replayLog = tradeLog.map(t => ({ frame: t.frame, side: t.side, alloc: t.alloc }));
 
     const entry = {
         profit: profit,
@@ -1209,9 +1410,12 @@ function endGame(message) {
         time: Math.floor(frames / 60),
         timestamp: new Date().toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
         isoDate: isoDate,
+        levelDate: levelDate,         // bars-anchored date — matches what ghosts replay against
         ticker: activeTicker,
         mode: sessionMode,
         priceSnapshot: priceSnapshot,
+        tradeLog: replayLog,          // for ghost racing
+        sessionFrames: frames,
     };
 
     // Sessions <10s don't qualify — quick rage-quits, accidental ESC, etc.
@@ -1320,6 +1524,21 @@ function resetGame(startPrice) {
     tradeLog.length = 0;
     _sfxLastPortfolio = null;
     _sfxLastFireFrame = -999;
+    // Reset ghost runtime state (schedules already loaded by initGhosts)
+    ghosts.forEach(g => {
+        g.portfolio = g.startPortfolio;
+        g.position = 0;
+        g.entryPrice = 0;
+        g.prevPrice = 0;
+        g.scheduleIdx = 0;
+        g.livesCount = 3;
+        g.isAlive = true;
+        g.cat.y = 0;
+        g.cat.trail.length = 0;
+    });
+    _lastRaceBoardFrame = -999;
+    const board = document.getElementById('raceBoard');
+    if (board) board.style.display = raceMode ? '' : 'none';
     gameOverScreen.classList.add('hidden');
     gameOverScreen.classList.remove('leaderboard-glow');
     document.getElementById('resultAmount').innerText = '';
@@ -1350,11 +1569,14 @@ function animate() {
     }
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     updateMarket();
+    ghostsTick();
     drawBackground();
     cat.update();
+    drawGhosts();                  // ghosts under player so player cat reads as primary
     cat.draw();
     if (window.opponentState) drawOpponentCat(window.opponentState);
     updateHUD();
+    updateRaceBoard();
     checkPortfolioSFX();
     frames++;
     const spyDone = spyMode && spyBarIdx >= spyBars.length - 1 && spyFrameCounter >= spyFramesPerBar - 1;
@@ -1362,19 +1584,41 @@ function animate() {
     else requestAnimationFrame(animate);
 }
 
+function clearRaceMode() {
+    raceMode = false;
+    ghosts.length = 0;
+    const board = document.getElementById('raceBoard');
+    if (board) board.style.display = 'none';
+}
+
 restartBtn.addEventListener('click', () => {
     gameOverScreen.classList.add('hidden');
+    clearRaceMode();
     showLevelSelect();
 });
 document.getElementById('quickPlayLastOpenBtn').addEventListener('click', async () => {
     readTickerFromInput();
+    clearRaceMode();
     const btn = document.getElementById('quickPlayLastOpenBtn');
     await loadLevel(lastCompletedOpenDateStr(), 'open', btn);
 });
 document.getElementById('quickPlayLast60Btn').addEventListener('click', () => {
     readTickerFromInput();
+    clearRaceMode();
     startQuickPlay(activeTicker, activeTickerIsCrypto);
 });
+
+// Race the Rainbow: load top 6 ghosts from the same level + replay them.
+document.getElementById('raceRainbowBtn').addEventListener('click', async () => {
+    readTickerFromInput();
+    const date = lastCompletedOpenDateStr();
+    const matches = loadGhostsForLevel(activeTicker, 'open', date);
+    initGhosts(matches, START_PORTFOLIO);
+    raceMode = true;
+    const btn = document.getElementById('raceRainbowBtn');
+    await loadLevel(date, 'open', btn);
+});
+
 // Export Time & Sales as TraderVue/IBKR-compatible CSV
 document.getElementById('exportTradesBtn')?.addEventListener('click', exportTradesCSV);
 
@@ -1383,6 +1627,7 @@ document.getElementById('tickerInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') {
         e.preventDefault();
         readTickerFromInput();
+        clearRaceMode();
         startQuickPlay(activeTicker, activeTickerIsCrypto);
     }
 });

@@ -276,6 +276,76 @@ body, html {
     overflow: hidden;
 }
 
+/* ---- Race flip-board (left panel, only visible during ghost races) ---- */
+#raceBoard {
+    width: 110px;
+    flex-shrink: 0;
+    background: rgba(0, 0, 0, 0.85);
+    border-right: 2px solid #333;
+    display: flex;
+    flex-direction: column;
+    color: white;
+    font-family: 'Courier New', Courier, monospace;
+    overflow-y: auto;
+    padding: 4px 2px;
+    gap: 2px;
+}
+.rb-row {
+    display: grid;
+    grid-template-columns: 18px 8px 1fr;
+    grid-template-rows: auto auto;
+    gap: 1px 4px;
+    padding: 4px 4px;
+    border-bottom: 1px solid #1a1a1a;
+    font-size: 10px;
+    align-items: center;
+}
+.rb-row.rb-you {
+    background: rgba(0, 60, 0, 0.55);
+    border: 1px solid #00ff00;
+    border-radius: 3px;
+    box-shadow: 0 0 6px rgba(0, 255, 0, 0.4);
+}
+.rb-row.rb-out {
+    opacity: 0.35;
+    text-decoration: line-through;
+}
+.rb-rank {
+    grid-row: span 2;
+    font-size: 14px;
+    text-align: center;
+}
+.rb-num {
+    color: #888;
+    font-weight: bold;
+    font-size: 11px;
+}
+.rb-dot {
+    grid-row: span 2;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    align-self: center;
+}
+.rb-name {
+    font-weight: bold;
+    font-size: 9px;
+    color: #ddd;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.rb-pnl {
+    font-size: 9px;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+@media (max-width: 600px) {
+    #raceBoard { width: 88px; }
+    .rb-row { font-size: 9px; }
+    .rb-name, .rb-pnl { font-size: 8px; }
+}
+
 #canvas-container {
     flex: 1;
     position: relative;
