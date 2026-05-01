@@ -435,8 +435,17 @@ function tryStartMusic() {
 
 window.addEventListener('keydown', e => {
     if (e.code === 'Escape') {
-        // ESC ends the session (qualifies for leaderboard if >=10s played).
-        if (!isGameOver) endGame('Session Ended');
+        if (isGameOver) return;
+        // First press → pause + show menu. Press again to resume.
+        if (isPaused) {
+            isPaused = false;
+            hidePauseMenu();
+            if (musicStarted) bgMusic.play();
+        } else {
+            isPaused = true;
+            bgMusic.pause();
+            showPauseMenu();
+        }
         return;
     }
 
@@ -1385,6 +1394,28 @@ function endGame(message) {
     finalScoreElement.innerText = `$${portfolioAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
     finalTimeElement.innerText = `${Math.floor(frames / 60)}s`;
 
+    // $/sec earn rate + annualized projection (252 trading days × 6.5h = 5.9M sec/yr).
+    const sessionSec = Math.max(1, frames / 60);
+    const dollarsPerSec = profit / sessionSec;
+    const tradingYearSec = 252 * 6.5 * 3600;
+    const annual = dollarsPerSec * tradingYearSec;
+    const rateLine = document.getElementById('rateLine');
+    if (rateLine) {
+        const rateSign = dollarsPerSec >= 0 ? '+' : '';
+        const annualSign = annual >= 0 ? '+' : '';
+        const fmtBig = (n) => {
+            const a = Math.abs(n);
+            if (a >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+            if (a >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+            if (a >= 1e3) return (n / 1e3).toFixed(1) + 'k';
+            return n.toFixed(0);
+        };
+        const rateClass = dollarsPerSec >= 0 ? 'profit' : 'loss';
+        rateLine.innerHTML = `Rate: <span class="${rateClass}">${rateSign}$${dollarsPerSec.toFixed(2)}/sec</span> &middot; ` +
+            `Annualized: <span class="${rateClass}">${annualSign}$${fmtBig(annual)}/yr</span> ` +
+            `<span style="opacity:0.5;font-size:11px">(252 d &times; 6.5 h)</span>`;
+    }
+
     // Downsample price history for calendar mini-charts (~50 points)
     const snapshotStep = Math.max(1, Math.floor(priceHistory.length / 50));
     const priceSnapshot = [];
@@ -1416,6 +1447,9 @@ function endGame(message) {
         priceSnapshot: priceSnapshot,
         tradeLog: replayLog,          // for ghost racing
         sessionFrames: frames,
+        playerName: userProfile?.name || 'Trader',
+        playerFlag: userProfile?.flag || '',
+        playerCountry: userProfile?.countryName || '',
     };
 
     // Sessions <10s don't qualify — quick rage-quits, accidental ESC, etc.
@@ -1472,9 +1506,8 @@ function updateLeaderboardUI(highlightPos) {
     const topEntries = [...allSessions].sort((a, b) => b.profit - a.profit).slice(0, 20);
     highScoresList.innerHTML = topEntries.map((s, i) => {
         const isHighlight = highlightPos != null && i === highlightPos - 1;
-        const startAmt = s.startPortfolio != null
-            ? `$${s.startPortfolio.toLocaleString()} start`
-            : 'Unknown start';
+        const flag = s.playerFlag || '';
+        const playerName = s.playerName || 'Trader';
         const profitStr = `${s.profit >= 0 ? '+' : ''}$${Math.abs(s.profit).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
         const sign = s.profit >= 0 ? '+' : '-';
         const pctStr = s.profitPercent != null
@@ -1484,7 +1517,7 @@ function updateLeaderboardUI(highlightPos) {
         const badge = [s.ticker || 'BTC/USD', s.mode || 'sim', s.timestamp || ''].filter(Boolean).join(' · ');
         return `
             <li class="${isHighlight ? 'lb-highlight' : ''}">
-                <div class="lb-name">${isHighlight ? '▶ ' : ''}${startAmt}</div>
+                <div class="lb-name">${isHighlight ? '▶ ' : ''}${flag} ${playerName}</div>
                 <div class="lb-pnl ${pnlClass}">${profitStr}${pctStr}</div>
                 <div class="lb-meta">
                     <span class="lb-time">${s.time}s session</span>
@@ -1583,6 +1616,68 @@ function animate() {
     if (spyDone || (!spyMode && frames >= LEVEL_DURATION)) endGame(spyMode ? 'SPY Level Complete!' : 'Session Closed!');
     else requestAnimationFrame(animate);
 }
+
+// ---- Pause menu ----
+function showPauseMenu() { document.getElementById('pauseMenu').classList.remove('hidden'); }
+function hidePauseMenu() { document.getElementById('pauseMenu').classList.add('hidden'); }
+
+document.getElementById('resumeBtn')?.addEventListener('click', () => {
+    isPaused = false;
+    hidePauseMenu();
+    if (musicStarted) bgMusic.play();
+});
+document.getElementById('endSessionBtn')?.addEventListener('click', () => {
+    hidePauseMenu();
+    isPaused = false;
+    if (!isGameOver) endGame('Session Ended');
+});
+
+// ---- Profile (name + country flag) ----
+const PROFILE_KEY = 'nyan_profile';
+const FLAG_BY_CODE = { CA: '🇨🇦', US: '🇺🇸', CN: '🇨🇳' };
+let userProfile = null;
+try { userProfile = JSON.parse(localStorage.getItem(PROFILE_KEY) || 'null'); } catch {}
+
+function saveProfile(name, code, flag, countryName) {
+    userProfile = { name, code, flag, countryName };
+    localStorage.setItem(PROFILE_KEY, JSON.stringify(userProfile));
+}
+
+function showProfileModal() {
+    document.getElementById('profileModal').classList.remove('hidden');
+    if (userProfile) {
+        document.getElementById('profileName').value = userProfile.name || '';
+        const radio = document.querySelector(`input[name="country"][value="${userProfile.code}"]`);
+        if (radio) radio.checked = true;
+        else document.querySelector('input[name="country"][value="OTHER"]').checked = true;
+        if (userProfile.code === 'OTHER') {
+            const otherInp = document.getElementById('profileOtherCountry');
+            otherInp.classList.remove('hidden');
+            otherInp.value = userProfile.countryName || '';
+        }
+    }
+}
+
+document.querySelectorAll('input[name="country"]').forEach(r => {
+    r.addEventListener('change', () => {
+        const isOther = document.querySelector('input[name="country"]:checked').value === 'OTHER';
+        document.getElementById('profileOtherCountry').classList.toggle('hidden', !isOther);
+        if (isOther) document.getElementById('profileOtherCountry').focus();
+    });
+});
+
+document.getElementById('profileSaveBtn').addEventListener('click', () => {
+    const name = document.getElementById('profileName').value.trim() || 'Trader';
+    const code = document.querySelector('input[name="country"]:checked').value;
+    let flag = FLAG_BY_CODE[code] || '🌐';
+    let countryName = code;
+    if (code === 'OTHER') {
+        countryName = document.getElementById('profileOtherCountry').value.trim() || 'Other';
+    }
+    saveProfile(name, code, flag, countryName);
+    document.getElementById('profileModal').classList.add('hidden');
+    if (!gameOverScreen.classList.contains('hidden')) updateLeaderboardUI();
+});
 
 function clearRaceMode() {
     raceMode = false;
@@ -1906,6 +2001,7 @@ document.getElementById('calTabAll').addEventListener('click', () => {
 resizeCanvas();
 cat.y = canvas.height / 2;
 updateLeaderboardUI();
+if (!userProfile) showProfileModal();
 showLevelSelect();
 
 // ---- Multiplayer API (used by multiplayer.js) ----

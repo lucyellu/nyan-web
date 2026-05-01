@@ -147,6 +147,7 @@
 
         <p>Final Portfolio: <span id="finalScore">$0.00</span></p>
         <p>Time Lasted: <span id="finalTime">0s</span></p>
+        <p id="rateLine"></p>
 
         <div id="leaderboard">
             <h3>Wall of Fame (Top Profits)</h3>
@@ -172,6 +173,39 @@
             <div id="calGrid"></div>
             <div id="calDayDetail" class="hidden"></div>
             <div id="calAllSessions" class="hidden"></div>
+        </div>
+    </div>
+
+    <!-- Pause menu -->
+    <div id="pauseMenu" class="hidden">
+        <div class="pause-card">
+            <h2>&#9208; Paused</h2>
+            <button id="resumeBtn" class="pause-primary">&#9654; Resume</button>
+            <button id="endSessionBtn" class="pause-secondary">End Session</button>
+            <p class="pause-hint">Press Esc to resume</p>
+        </div>
+    </div>
+
+    <!-- Profile modal (one-time onboarding; appears when no profile saved) -->
+    <div id="profileModal" class="hidden">
+        <div class="profile-card">
+            <h2>Welcome, trader.</h2>
+            <p class="profile-sub">Set your handle &mdash; appears on the leaderboard.</p>
+            <div class="profile-field">
+                <label for="profileName">Name</label>
+                <input type="text" id="profileName" maxlength="14" placeholder="Trader" autocomplete="off">
+            </div>
+            <div class="profile-field">
+                <label>Flag</label>
+                <div class="profile-flags">
+                    <label><input type="radio" name="country" value="CA" checked> &#127464;&#127462; Canada</label>
+                    <label><input type="radio" name="country" value="US"> &#127482;&#127480; United States</label>
+                    <label><input type="radio" name="country" value="CN"> &#127464;&#127475; China</label>
+                    <label><input type="radio" name="country" value="OTHER"> &#127760; Other</label>
+                </div>
+                <input type="text" id="profileOtherCountry" class="hidden" placeholder="country name" maxlength="20" autocomplete="off">
+            </div>
+            <button id="profileSaveBtn">Save &amp; Continue</button>
         </div>
     </div>
 
