@@ -618,10 +618,31 @@ const ghosts = [];
 // 6 distinct hues from the nyan rainbow palette — one per ghost lane.
 const RAINBOW_COLORS = ['#ff4444', '#ff9900', '#ffdd33', '#33dd33', '#33aaff', '#aa44ff'];
 
-function makeGhost(name, color, schedule, startPortfolio) {
+// Pool of nyan variant filenames (copied from NYAN.CAT! archive). Each ghost
+// gets a random pick — visual variety alongside lane color.
+const GHOST_SPRITES = [
+    'imgi_3_nyandoge.gif','imgi_4_GB.gif','imgi_5_technyancolor.gif','imgi_6_jazz.gif',
+    'imgi_7_mexinyan.gif','imgi_8_jacksnyan.gif','imgi_10_pirate.gif','imgi_12_pikanyan.gif',
+    'imgi_15_pumpkin.gif','imgi_17_rasta.gif','imgi_18_uhmurica.gif','imgi_19_retro.gif',
+    'imgi_20_vday.gif','imgi_22_tacnayn.gif','imgi_23_dub.gif','imgi_25_xmas.gif',
+    'imgi_26_tacodog.gif','imgi_27_easter.gif','imgi_28_bday.gif','imgi_30_paddy.gif',
+    'imgi_34_balloon.gif','imgi_35_grumpy.gif','imgi_48_original.gif',
+];
+const _ghostSpriteCache = {};
+function getGhostSprite(filename) {
+    if (!_ghostSpriteCache[filename]) {
+        const img = new Image();
+        img.src = `assets/cats/${filename}`;
+        _ghostSpriteCache[filename] = img;
+    }
+    return _ghostSpriteCache[filename];
+}
+
+function makeGhost(name, color, schedule, startPortfolio, spriteFile) {
     return {
         name,
         color,
+        sprite: spriteFile || GHOST_SPRITES[Math.floor(Math.random() * GHOST_SPRITES.length)],
         cat: { y: 0, trail: [] },        // x is locked to player so ghosts run alongside
         startPortfolio,
         portfolio: startPortfolio,
@@ -723,7 +744,7 @@ function ghostsTick() {
 function drawGhostCat(g) {
     const ox = cat.x + 18;
     const oy = g.cat.y;
-    const alpha = g.isAlive ? 0.5 : 0.18;
+    const alpha = g.isAlive ? 0.65 : 0.22;
 
     ctx.save();
     ctx.globalAlpha = alpha;
@@ -735,12 +756,18 @@ function drawGhostCat(g) {
         ctx.fillRect(ox + 25 - i * 10 - 10, oy + 18 + wy, 10, 14);
     }
 
-    // Cat sprite
-    const af = Math.floor(frames / 8) % frameCount;
-    if (nyanFrames[af]?.complete) ctx.drawImage(nyanFrames[af], ox, oy, cat.width, cat.height);
+    // Variant cat sprite (animated GIF from NYAN.CAT! archive, browser handles frames)
+    const sprite = getGhostSprite(g.sprite);
+    if (sprite.complete && sprite.naturalWidth > 0) {
+        ctx.drawImage(sprite, ox, oy, cat.width, cat.height);
+    } else {
+        // Fall back to default frame while gif loads
+        const af = Math.floor(frames / 8) % frameCount;
+        if (nyanFrames[af]?.complete) ctx.drawImage(nyanFrames[af], ox, oy, cat.width, cat.height);
+    }
 
     // Color outline
-    ctx.globalAlpha = alpha + 0.25;
+    ctx.globalAlpha = alpha + 0.20;
     ctx.strokeStyle = g.color;
     ctx.lineWidth = 2;
     ctx.strokeRect(ox - 2, oy - 2, cat.width + 4, cat.height + 4);
@@ -1215,51 +1242,41 @@ function takeDamage(msg) {
     if (livesCount <= 0) endGame("Portfolio Liquidated!");
 }
 
-// ---- SFX ----
+// ---- SFX (procedural, lifted from plushies/game_001.html) ----
 let _sfxCtx = null;
 function _sfxGetCtx() {
-    if (!_sfxCtx) _sfxCtx = new (window.AudioContext || window.webkitAudioContext)();
+    if (!_sfxCtx) {
+        try { _sfxCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch {}
+    }
     return _sfxCtx;
 }
 
-// Mario-style coin: short B5 → E6 chirp, square wave for 8-bit feel.
-function sfxCoin() {
+function playTone(freq, dur, type, gain, freqEnd, delayMs) {
     if (isMuted) return;
     try {
-        const ctx = _sfxGetCtx();
-        const t0 = ctx.currentTime;
-        [[988, 0, 0.06], [1319, 0.07, 0.16]].forEach(([f, dt, dur]) => {
-            const o = ctx.createOscillator();
-            const g = ctx.createGain();
-            o.connect(g); g.connect(ctx.destination);
-            o.type = 'square';
-            o.frequency.value = f;
-            g.gain.setValueAtTime(0, t0 + dt);
-            g.gain.linearRampToValueAtTime(0.07, t0 + dt + 0.005);
-            g.gain.linearRampToValueAtTime(0, t0 + dt + dur);
-            o.start(t0 + dt);
-            o.stop(t0 + dt + dur);
-        });
+        const ac = _sfxGetCtx();
+        if (!ac) return;
+        setTimeout(() => {
+            const osc = ac.createOscillator();
+            const g = ac.createGain();
+            osc.connect(g); g.connect(ac.destination);
+            osc.type = type || 'sine';
+            osc.frequency.setValueAtTime(freq, ac.currentTime);
+            if (freqEnd) osc.frequency.exponentialRampToValueAtTime(freqEnd, ac.currentTime + dur);
+            g.gain.setValueAtTime(gain || 0.2, ac.currentTime);
+            g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+            osc.start(ac.currentTime);
+            osc.stop(ac.currentTime + dur + 0.01);
+        }, delayMs || 0);
     } catch {}
 }
 
-// Slow descending hit: A3 → low rumble.
-function sfxHit() {
-    if (isMuted) return;
-    try {
-        const ctx = _sfxGetCtx();
-        const t0 = ctx.currentTime;
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.connect(g); g.connect(ctx.destination);
-        o.type = 'sawtooth';
-        o.frequency.setValueAtTime(220, t0);
-        o.frequency.exponentialRampToValueAtTime(70, t0 + 0.35);
-        g.gain.setValueAtTime(0.10, t0);
-        g.gain.exponentialRampToValueAtTime(0.001, t0 + 0.35);
-        o.start(t0);
-        o.stop(t0 + 0.38);
-    } catch {}
+function sfxCoin()     { playTone(1046, 0.07, 'sine', 0.14); playTone(1318, 0.07, 'sine', 0.10, null, 65); playTone(1568, 0.10, 'sine', 0.08, null, 120); }
+function sfxHit()      { playTone(220, 0.08, 'sawtooth', 0.25, 90); playTone(140, 0.22, 'square', 0.15, 60, 60); }
+function sfxClick()    { playTone(660, 0.06, 'sine', 0.12, 880); }
+function sfxLevelWin() { [523, 659, 784, 1046, 1318, 1568].forEach((f, i) => playTone(f, 0.15, 'sine', 0.18, null, i * 100)); }
+function sfxSadTrombone() {
+    [330, 294, 262, 220].forEach((f, i) => playTone(f, 0.25, 'triangle', 0.15, f * 0.85, i * 180));
 }
 
 // Watch portfolio over the last 1s; fire coin/hit if it moved meaningfully.
@@ -1488,11 +1505,12 @@ function endGame(message) {
         leaderboardPosEl.className = 'result-leaderboard';
         resultMessageEl.innerText = profit >= 0 ? "Legendary session. You're on the board!" : 'Even in losses, you made history.';
         gameOverScreen.classList.add('leaderboard-glow');
-        playFanfare();
+        if (profit >= 0) sfxLevelWin(); else sfxSadTrombone();
     } else {
         leaderboardPosEl.innerText = '';
         leaderboardPosEl.className = '';
         resultMessageEl.innerText = profit > 0 ? 'Nice trading! Keep grinding.' : 'Markets are tough. Come back stronger.';
+        if (profit > 0) sfxLevelWin(); else if (profit < 0) sfxSadTrombone();
     }
 
     if (profit > 0) startConfetti();
@@ -1622,11 +1640,13 @@ function showPauseMenu() { document.getElementById('pauseMenu').classList.remove
 function hidePauseMenu() { document.getElementById('pauseMenu').classList.add('hidden'); }
 
 document.getElementById('resumeBtn')?.addEventListener('click', () => {
+    sfxClick();
     isPaused = false;
     hidePauseMenu();
     if (musicStarted) bgMusic.play();
 });
 document.getElementById('endSessionBtn')?.addEventListener('click', () => {
+    sfxClick();
     hidePauseMenu();
     isPaused = false;
     if (!isGameOver) endGame('Session Ended');
@@ -1692,12 +1712,14 @@ restartBtn.addEventListener('click', () => {
     showLevelSelect();
 });
 document.getElementById('quickPlayLastOpenBtn').addEventListener('click', async () => {
+    sfxClick();
     readTickerFromInput();
     clearRaceMode();
     const btn = document.getElementById('quickPlayLastOpenBtn');
     await loadLevel(lastCompletedOpenDateStr(), 'open', btn);
 });
 document.getElementById('quickPlayLast60Btn').addEventListener('click', () => {
+    sfxClick();
     readTickerFromInput();
     clearRaceMode();
     startQuickPlay(activeTicker, activeTickerIsCrypto);
@@ -1705,6 +1727,7 @@ document.getElementById('quickPlayLast60Btn').addEventListener('click', () => {
 
 // Race the Rainbow: load top 6 ghosts from the same level + replay them.
 document.getElementById('raceRainbowBtn').addEventListener('click', async () => {
+    sfxClick();
     readTickerFromInput();
     const date = lastCompletedOpenDateStr();
     const matches = loadGhostsForLevel(activeTicker, 'open', date);
