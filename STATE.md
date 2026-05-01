@@ -18,7 +18,7 @@
 - Static publish on Netlify. `netlify.toml` overrides Netlify's old auto-detected Hugo config (`build_command: hugo`, `base: public`) — site settings were also patched via API. Don't re-trigger Hugo detection by adding things that look like Hugo conventions.
 - Yahoo Finance v8 chart API via CORS proxy chain: `api.allorigins.win` (primary) → `corsproxy.io` (fallback). No API keys.
 - Bar cache: `localStorage[nyan_bars_v2_<TICKER>]`, 24h ring buffer per ticker. Window served from cache when newest expected bar is >3 min old AND ≥70% coverage.
-- Race mode (Last Open only) replays top-6 saved sessions' `tradeLog` (frame + side + alloc) on the same bars. Synthetic "🤖 Hodl Bot" baseline when no real ghosts exist.
+- Race mode (Last Open only) replays top-4 saved sessions' `tradeLog` (frame + side + alloc) on the same bars. Each ghost has its own X position based on current P&L rank (leader on the right ~65% of width, last on the left ~20%) and a fixed Y lane. Cats race horizontally as ranks shuffle. Synthetic "🤖 Hodl Bot" baseline when no real ghosts exist. Each ghost's recent trades show as fading BUY/SELL flashes in the flip-board row.
 - Skin unlocks driven by `progress` counters in `localStorage[nyan_progress]`. 7 skins shipped (1 default + 6 unlockable). 25 NYAN.CAT! variants in `assets/cats/` are also used by ghost cats randomly.
 
 ## Persistent localStorage keys

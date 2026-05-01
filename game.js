@@ -643,7 +643,7 @@ function makeGhost(name, color, schedule, startPortfolio, spriteFile) {
         name,
         color,
         sprite: spriteFile || GHOST_SPRITES[Math.floor(Math.random() * GHOST_SPRITES.length)],
-        cat: { y: 0, trail: [] },        // x is locked to player so ghosts run alongside
+        cat: { x: 0, y: 0, trail: [] },   // x = race position (rank-based), y = fixed lane
         startPortfolio,
         portfolio: startPortfolio,
         position: 0,
@@ -653,17 +653,20 @@ function makeGhost(name, color, schedule, startPortfolio, spriteFile) {
         scheduleIdx: 0,
         livesCount: 3,
         isAlive: true,
+        tape: [],                         // recent trades for live flip-board display
     };
 }
 
 // Find leaderboard entries that played the same fixed-data level.
+// Top 4 only — keeps the screen + flip-board readable, and matches the
+// "horse race" feel better than 6.
 function loadGhostsForLevel(ticker, mode, levelDate) {
     if (!ticker || !mode || mode === 'sim') return [];
     return allSessions
         .filter(s => s.ticker === ticker && s.mode === mode && s.levelDate === levelDate
                   && Array.isArray(s.tradeLog) && s.tradeLog.length > 0)
         .sort((a, b) => b.profit - a.profit)
-        .slice(0, 6);
+        .slice(0, 4);
 }
 
 function initGhosts(matches, startPortfolio) {
@@ -692,6 +695,7 @@ function initGhosts(matches, startPortfolio) {
 function executeGhostTrade(g, side, alloc) {
     const tradeValue = g.portfolio * (alloc / 100);
     const units = tradeValue / currentBTCPrice;
+    let executed = false;
     if (side === 'BUY') {
         const positionValue = g.position * currentBTCPrice;
         const freeCash = Math.max(0, g.portfolio - positionValue);
@@ -700,17 +704,33 @@ function executeGhostTrade(g, side, alloc) {
         if (effectiveUnits > 0) {
             g.position += effectiveUnits;
             g.entryPrice = currentBTCPrice;
+            executed = true;
         }
     } else if (side === 'SELL') {
         if (g.position > 0) {
             const unitsSold = Math.min(units, g.position);
             g.position = Math.max(0, g.position - unitsSold);
+            executed = true;
         }
+    }
+    if (executed) {
+        g.tape.unshift({ frame: frames, side, price: currentBTCPrice });
+        if (g.tape.length > 4) g.tape.pop();
     }
 }
 
 function ghostsTick() {
     if (!raceMode || ghosts.length === 0) return;
+
+    // Rank ghosts by P&L % so x position reflects current race standing.
+    const rankByIdx = new Map();
+    ghosts
+        .map((g, idx) => ({ idx, pct: g.startPortfolio > 0 ? (g.portfolio - g.startPortfolio) / g.startPortfolio * 100 : 0 }))
+        .sort((a, b) => b.pct - a.pct)
+        .forEach((r, rank) => rankByIdx.set(r.idx, rank));
+
+    const totalGhosts = ghosts.length;
+
     ghosts.forEach((g, i) => {
         if (!g.isAlive) return;
 
@@ -733,20 +753,28 @@ function ghostsTick() {
         if (totalDrawdown >= maxAllowedDrawdown && g.livesCount > 0) g.livesCount--;
         if (g.livesCount <= 0) { g.isAlive = false; g.position = 0; }
 
-        // Cat position: spread across vertical band based on rank, smoothed.
-        // We compute rank below in updateRaceBoard; use stored prevRank for now.
-        const targetY = canvas.height * 0.18 + (i * (canvas.height * 0.6) / Math.max(ghosts.length - 1, 1));
-        if (g.cat.y === 0) g.cat.y = targetY;
-        g.cat.y += (targetY - g.cat.y) * 0.04;
+        // Y: each ghost stays in a fixed horizontal lane, top to bottom.
+        const laneY = canvas.height * (0.20 + i * 0.55 / Math.max(totalGhosts - 1, 1));
 
-        // Trail
-        g.cat.trail.push({ x: cat.x + 40, y: g.cat.y + 30, frame: frames });
+        // X: based on current P&L rank — leader on the right (~65% of width),
+        // last place on the left (~20%). Smooth lerp so swaps don't snap.
+        const rank = rankByIdx.get(i);
+        const targetXPct = 0.65 - (rank / Math.max(totalGhosts - 1, 1)) * 0.45;
+        const targetX = canvas.width * targetXPct;
+
+        // Lazy init on first tick (canvas may have just been sized).
+        if (g.cat.x === 0 && g.cat.y === 0) { g.cat.x = targetX; g.cat.y = laneY; }
+        g.cat.x += (targetX - g.cat.x) * 0.06;
+        g.cat.y += (laneY - g.cat.y) * 0.05;
+
+        // Trail at the ghost's actual x (not player's).
+        g.cat.trail.push({ x: g.cat.x + 40, y: g.cat.y + 30, frame: frames });
         if (g.cat.trail.length > 800) g.cat.trail.shift();
     });
 }
 
 function drawGhostCat(g) {
-    const ox = cat.x + 18;
+    const ox = g.cat.x + 18;
     const oy = g.cat.y;
     const alpha = g.isAlive ? 0.65 : 0.22;
 
@@ -811,12 +839,13 @@ function updateRaceBoard() {
     // Build standings: player + ghosts, sorted by P&L %
     const playerPct = START_PORTFOLIO > 0 ? (portfolioAmount - START_PORTFOLIO) / START_PORTFOLIO * 100 : 0;
     const standings = [
-        { isYou: true, name: 'YOU', color: '#ffffff', pct: playerPct, dollars: portfolioAmount - START_PORTFOLIO, alive: livesCount > 0 },
+        { isYou: true, name: 'YOU', color: '#ffffff', pct: playerPct, dollars: portfolioAmount - START_PORTFOLIO, alive: livesCount > 0, lastTrade: null },
         ...ghosts.map(g => ({
             isYou: false, name: g.name, color: g.color,
             pct: g.startPortfolio > 0 ? (g.portfolio - g.startPortfolio) / g.startPortfolio * 100 : 0,
             dollars: g.portfolio - g.startPortfolio,
             alive: g.isAlive,
+            lastTrade: g.tape && g.tape[0],
         })),
     ].sort((a, b) => b.pct - a.pct);
 
@@ -825,14 +854,22 @@ function updateRaceBoard() {
         const rank = i < 3 ? medals[i] : `<span class="rb-num">${i + 1}</span>`;
         const sign = s.pct >= 0 ? '+' : '';
         const dollarsAbs = Math.abs(s.dollars);
-        const dollars = `${sign}$${dollarsAbs >= 1000 ? (dollarsAbs / 1000).toFixed(1) + 'k' : dollarsAbs.toFixed(0)}`;
+        const dollars = `${sign}$${dollarsAbs >= 1000 ? (dollarsAbs / 1000).toFixed(1) + 'k' : dollarsAbs.toFixed(2)}`;
         const pct = `${sign}${s.pct.toFixed(1)}%`;
         const cls = ['rb-row', s.isYou ? 'rb-you' : '', !s.alive ? 'rb-out' : ''].filter(Boolean).join(' ');
+        // Live trade indicator: shows for ~2s after a trade fires (120 frames @ 60fps).
+        let action = '';
+        if (s.lastTrade && (frames - s.lastTrade.frame) < 120) {
+            const fade = 1 - (frames - s.lastTrade.frame) / 120;
+            const sideClass = s.lastTrade.side === 'BUY' ? 'profit' : 'loss';
+            action = `<div class="rb-action ${sideClass}" style="opacity:${fade.toFixed(2)}">${s.lastTrade.side} $${s.lastTrade.price.toFixed(2)}</div>`;
+        }
         return `<div class="${cls}">
             <div class="rb-rank">${rank}</div>
             <div class="rb-dot" style="background:${s.color}"></div>
             <div class="rb-name">${s.isYou ? '▶ YOU' : s.name}</div>
             <div class="rb-pnl ${s.pct >= 0 ? 'profit' : 'loss'}">${dollars}<br>${pct}</div>
+            ${action}
         </div>`;
     }).join('');
 }
@@ -1627,8 +1664,10 @@ function resetGame(startPrice) {
         g.scheduleIdx = 0;
         g.livesCount = 3;
         g.isAlive = true;
+        g.cat.x = 0;
         g.cat.y = 0;
         g.cat.trail.length = 0;
+        g.tape.length = 0;
     });
     _lastRaceBoardFrame = -999;
     const board = document.getElementById('raceBoard');

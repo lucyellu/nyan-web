@@ -462,6 +462,19 @@ body, html {
     line-height: 1.2;
     white-space: nowrap;
 }
+.rb-action {
+    grid-column: 1 / -1;
+    font-size: 9px;
+    font-weight: bold;
+    text-align: center;
+    margin-top: 2px;
+    padding: 2px 4px;
+    border-radius: 2px;
+    background: rgba(0, 0, 0, 0.4);
+    letter-spacing: 0.5px;
+}
+.rb-action.profit { color: #00ff88; box-shadow: inset 0 0 0 1px rgba(0, 255, 136, 0.4); }
+.rb-action.loss   { color: #ff4444; box-shadow: inset 0 0 0 1px rgba(255, 68, 68, 0.4); }
 @media (max-width: 600px) {
     #raceBoard { width: 88px; }
     .rb-row { font-size: 9px; }
