@@ -671,7 +671,7 @@ function initGhosts(matches, startPortfolio) {
     if (matches.length === 0) {
         // Synthetic baseline so the first racer of any level isn't alone.
         ghosts.push(makeGhost(
-            'Hodl Bot',
+            '🤖 Hodl Bot',
             RAINBOW_COLORS[0],
             [{ frame: 0, side: 'BUY', alloc: 100 }],
             startPortfolio,
@@ -679,8 +679,12 @@ function initGhosts(matches, startPortfolio) {
         return;
     }
     matches.forEach((m, i) => {
-        const sign = m.profitPercent >= 0 ? '+' : '';
-        const name = `${sign}${m.profitPercent.toFixed(1)}%`;
+        const flag = m.playerFlag || '';
+        const playerName = m.playerName || 'Trader';
+        // Name format: "🇨🇦 Lucy" (flag + name) — falls back to profit % if no profile saved.
+        const name = (flag || playerName !== 'Trader')
+            ? `${flag} ${playerName}`.trim()
+            : `${m.profitPercent >= 0 ? '+' : ''}${m.profitPercent.toFixed(1)}%`;
         ghosts.push(makeGhost(name, RAINBOW_COLORS[i], m.tradeLog, startPortfolio));
     });
 }
@@ -1408,7 +1412,7 @@ function endGame(message) {
 
     const profit = portfolioAmount - START_PORTFOLIO;
     const profitPct = (profit / START_PORTFOLIO) * 100;
-    finalScoreElement.innerText = `$${portfolioAmount.toLocaleString(undefined, {minimumFractionDigits: 2})}`;
+    finalScoreElement.innerText = `$${portfolioAmount.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}`;
     finalTimeElement.innerText = `${Math.floor(frames / 60)}s`;
 
     // $/sec earn rate + annualized projection (252 trading days × 6.5h = 5.9M sec/yr).
@@ -1491,7 +1495,7 @@ function endGame(message) {
     const resultMessageEl = document.getElementById('resultMessage');
     const leaderboardPosEl = document.getElementById('leaderboardPosition');
     const sign = profit >= 0 ? '+' : '';
-    resultAmountEl.innerText = `${sign}$${Math.abs(profit).toLocaleString(undefined, {minimumFractionDigits: 2})} (${sign}${profitPct.toFixed(2)}%)`;
+    resultAmountEl.innerText = `${sign}$${Math.abs(profit).toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})} (${sign}${profitPct.toFixed(2)}%)`;
     resultAmountEl.className = profit >= 0 ? 'profit' : 'loss';
 
     const medals = ['🥇', '🥈', '🥉'];
@@ -1963,7 +1967,7 @@ function showCalDayDetail(isoDate) {
                 </div>
                 <div class="cal-session-meta">
                     ${s.ticker || 'BTC/USD'} · ${s.mode || 'sim'} · ${s.time}s<br>
-                    ${s.startPortfolio ? '$' + s.startPortfolio.toLocaleString() + ' start' : ''}
+                    ${s.playerFlag || ''} ${s.playerName || 'Trader'}${s.startPortfolio ? ' · $' + s.startPortfolio.toLocaleString(undefined, {maximumFractionDigits: 2}) + ' start' : ''}
                 </div>
                 ${renderMiniChart(s.priceSnapshot, 80, 34)}
             </div>
